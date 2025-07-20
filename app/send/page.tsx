@@ -73,7 +73,7 @@ export default function SendPage() {
     }
 
     const totalAmount = parseFloat(amount) + parseFloat(estimatedFee || "0");
-    if (totalAmount > parseFloat(balance)) {
+    if (totalAmount > balance) {
       setError("Insufficient balance (including gas fees)");
       return;
     }
@@ -100,7 +100,7 @@ export default function SendPage() {
   const handleMaxAmount = () => {
     if (!balance || !estimatedFee) return;
     
-    const maxAmount = Math.max(0, parseFloat(balance) - parseFloat(estimatedFee));
+    const maxAmount = Math.max(0, balance - parseFloat(estimatedFee));
     setAmount(maxAmount.toFixed(6));
   };
 
@@ -137,7 +137,7 @@ export default function SendPage() {
                   {balanceLoading ? (
                     <span className="loading-shimmer">Loading...</span>
                   ) : (
-                    `${parseFloat(balance).toFixed(6)} ETH`
+                    `${balance.toFixed(6)} ETH`
                   )}
                 </div>
                 <button

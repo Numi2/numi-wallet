@@ -37,8 +37,8 @@ export class NumiBlockchain {
   private pendingTransactions: any[] = [];
   private miningNodes: Set<string> = new Set();
   private stats: NumiBlockchainStats;
-  private onBlockMined?: (block: NumiBlock) => void;
-  private onStatsUpdate?: (stats: NumiBlockchainStats) => void;
+  private _onBlockMined?: (block: NumiBlock) => void;
+  private _onStatsUpdate?: (stats: NumiBlockchainStats) => void;
 
   constructor() {
     // Create genesis block
@@ -114,12 +114,12 @@ export class NumiBlockchain {
     this.updateAverageBlockTime();
     
     // Notify listeners
-    if (this.onBlockMined) {
-      this.onBlockMined(newBlock);
+    if (this._onBlockMined) {
+      this._onBlockMined(newBlock);
     }
     
-    if (this.onStatsUpdate) {
-      this.onStatsUpdate({ ...this.stats });
+    if (this._onStatsUpdate) {
+      this._onStatsUpdate({ ...this.stats });
     }
     
     console.log(`✅ Block ${newBlock.index} added to chain`);
@@ -196,6 +196,9 @@ export class NumiBlockchain {
       const totalTime = (recentBlocks[recentBlocks.length - 1].timestamp - recentBlocks[0].timestamp) / 1000;
       this.stats.averageBlockTime = totalTime / (recentBlocks.length - 1);
     }
+    if (this._onStatsUpdate) {
+      this._onStatsUpdate(this.stats);
+    }
   }
 
   // Register a mining node
@@ -242,11 +245,11 @@ export class NumiBlockchain {
 
   // Set callbacks
   onBlockMined(callback: (block: NumiBlock) => void): void {
-    this.onBlockMined = callback;
+    this._onBlockMined = callback;
   }
 
   onStatsUpdate(callback: (stats: NumiBlockchainStats) => void): void {
-    this.onStatsUpdate = callback;
+    this._onStatsUpdate = callback;
   }
 
   // Validate the entire chain
@@ -270,8 +273,8 @@ export class NumiMiner {
   private isMining = false;
   private stats: MiningStats;
   private minerAddress: string;
-  private onStatsUpdate?: (stats: MiningStats) => void;
-  private onBlockMined?: (block: NumiBlock) => void;
+  private _onStatsUpdate?: (stats: MiningStats) => void;
+  private _onBlockMined?: (block: NumiBlock) => void;
   private workerCount: number;
 
   constructor(blockchain: NumiBlockchain, minerAddress: string, workerCount = 4) {
@@ -464,8 +467,8 @@ export class NumiMiner {
     }
     
     // Notify callback
-    if (this.onBlockMined) {
-      this.onBlockMined(block);
+    if (this._onBlockMined) {
+      this._onBlockMined(block);
     }
   }
 
@@ -507,20 +510,20 @@ export class NumiMiner {
     console.log('⏹️ NumiCoin mining stopped');
   }
 
-  // Update stats and notify callback
+  // Update stats and notify listeners
   private updateStats(): void {
-    if (this.onStatsUpdate) {
-      this.onStatsUpdate({ ...this.stats });
+    if (this._onStatsUpdate) {
+      this._onStatsUpdate(this.stats);
     }
   }
 
   // Set callbacks
   onStatsUpdate(callback: (stats: MiningStats) => void): void {
-    this.onStatsUpdate = callback;
+    this._onStatsUpdate = callback;
   }
 
   onBlockMined(callback: (block: NumiBlock) => void): void {
-    this.onBlockMined = callback;
+    this._onBlockMined = callback;
   }
 
   // Get current stats

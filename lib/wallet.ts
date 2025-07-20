@@ -363,19 +363,27 @@ export async function getTransactionHistory(
         const block = await provider.getBlock(blockNumberToCheck, true);
         if (block && block.transactions) {
           for (const tx of block.transactions) {
-            if (tx.from === address || tx.to === address) {
-              transactions.push({
-                hash: tx.hash,
-                from: tx.from,
-                to: tx.to,
-                value: ethers.formatEther(tx.value),
-                blockNumber: blockNumberToCheck,
-                timestamp: block.timestamp,
-                type: tx.from === address ? 'sent' : 'received'
-              });
-              
-              if (transactions.length >= limit) {
-                return transactions;
+            if (
+              typeof tx === 'object' &&
+              tx !== null &&
+              'from' in tx &&
+              'to' in tx
+            ) {
+              const typedTx = tx as { from: string; to: string; [key: string]: any };
+              if (typedTx.from === address || typedTx.to === address) {
+                transactions.push({
+                  hash: typedTx.hash,
+                  from: typedTx.from,
+                  to: typedTx.to,
+                  value: ethers.formatEther(typedTx.value),
+                  blockNumber: blockNumberToCheck,
+                  timestamp: block.timestamp,
+                  type: typedTx.from === address ? 'sent' : 'received'
+                });
+                
+                if (transactions.length >= limit) {
+                  return transactions;
+                }
               }
             }
           }

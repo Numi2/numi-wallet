@@ -2,15 +2,16 @@
 
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { ethers } from "ethers";
-import { createWallet, importWallet, hasWallet, getWallet, lockWallet } from "@/lib/wallet";
+import { createWallet, importWallet, hasWallet, getWallet, lockWallet, sendTransaction as sendTransactionLib } from "@/lib/wallet";
 import { NumiBlockchain, NumiMiner } from "@/lib/numiBlockchain";
 
 interface WalletContextType {
   // Wallet state
   isLocked: boolean;
-  wallet: ethers.Wallet | null;
+  wallet: ethers.HDNodeWallet | null;
   address: string | null;
   balance: number;
+  balanceLoading: boolean;
   
   // Mining state
   isMining: boolean;
@@ -47,6 +48,7 @@ interface WalletContextType {
   refreshMiningStats: () => void;
   refreshBalance: () => void;
   updateSessionTimeout: (timeout: number) => void;
+  sendTransaction: (toAddress: string, amount: string) => Promise<string>;
 }
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
@@ -62,9 +64,10 @@ export const useWallet = () => {
 export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Wallet state
   const [isLocked, setIsLocked] = useState(true);
-  const [wallet, setWallet] = useState<ethers.Wallet | null>(null);
+  const [wallet, setWallet] = useState<ethers.HDNodeWallet | null>(null);
   const [address, setAddress] = useState<string | null>(null);
   const [balance, setBalance] = useState(0);
+  const [balanceLoading, setBalanceLoading] = useState(false);
   
   // Mining state
   const [isMining, setIsMining] = useState(false);
@@ -294,16 +297,40 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   // Refresh balance
-  const refreshBalance = () => {
+  const refreshBalance = async () => {
     if (address) {
-      const balance = blockchain.getBalance(address);
-      setBalance(balance);
+      setBalanceLoading(true);
+      try {
+        const balance = blockchain.getBalance(address);
+        setBalance(balance);
+      } catch (error) {
+        console.error('Error refreshing balance:', error);
+      } finally {
+        setBalanceLoading(false);
+      }
     }
   };
 
   // Update session timeout
   const updateSessionTimeout = (timeout: number) => {
     setSessionTimeout(timeout);
+  };
+
+  // Send transaction
+  const sendTransaction = async (toAddress: string, amount: string): Promise<string> => {
+    if (!wallet) {
+      throw new Error('Wallet not available');
+    }
+
+    try {
+      const txHash = await sendTransactionLib(wallet, toAddress, amount);
+      // Refresh balance after successful transaction
+      await refreshBalance();
+      return txHash;
+    } catch (error) {
+      console.error('Error sending transaction:', error);
+      throw error;
+    }
   };
 
   // Auto-refresh balance when address changes
@@ -319,6 +346,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     wallet,
     address,
     balance,
+    balanceLoading,
     
     // Mining state
     isMining,
@@ -342,6 +370,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     refreshMiningStats,
     refreshBalance,
     updateSessionTimeout,
+    sendTransaction,
   };
 
   return (

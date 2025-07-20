@@ -1,4 +1,5 @@
-import { blake3 } from 'blake3';
+import { blake3 } from '@noble/hashes/blake3';
+import { bytesToHex } from '@noble/hashes/utils';
 
 export interface Blake3MiningStats {
   hashRate: number;
@@ -22,8 +23,8 @@ export class Blake3Miner {
   private workers: Worker[] = [];
   private isMining = false;
   private stats: Blake3MiningStats;
-  private onStatsUpdate?: (stats: Blake3MiningStats) => void;
-  private onBlockMined?: (block: Blake3Block) => void;
+  private _onStatsUpdate?: (stats: Blake3MiningStats) => void;
+  private _onBlockMined?: (block: Blake3Block) => void;
   private workerCount: number;
 
   constructor(workerCount = 4) {
@@ -40,7 +41,7 @@ export class Blake3Miner {
 
   // Blake3 hash function - quantum-safe and faster than SHA-256
   private blake3Hash(data: string): string {
-    return blake3(data).toString('hex');
+    return bytesToHex(blake3(data));
   }
 
   // Calculate mining target based on difficulty
@@ -235,8 +236,8 @@ export class Blake3Miner {
     this.updateStats();
     
     // Notify callback
-    if (this.onBlockMined) {
-      this.onBlockMined(block);
+    if (this._onBlockMined) {
+      this._onBlockMined(block);
     }
   }
 
@@ -277,18 +278,18 @@ export class Blake3Miner {
 
   // Update stats and notify callback
   private updateStats(): void {
-    if (this.onStatsUpdate) {
-      this.onStatsUpdate({ ...this.stats });
+    if (this._onStatsUpdate) {
+      this._onStatsUpdate(this.stats);
     }
   }
 
   // Set callbacks
   onStatsUpdate(callback: (stats: Blake3MiningStats) => void): void {
-    this.onStatsUpdate = callback;
+    this._onStatsUpdate = callback;
   }
 
   onBlockMined(callback: (block: Blake3Block) => void): void {
-    this.onBlockMined = callback;
+    this._onBlockMined = callback;
   }
 
   // Get current stats
