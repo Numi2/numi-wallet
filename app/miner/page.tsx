@@ -1,363 +1,305 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { useWallet } from "@/context/WalletContext";
-import { hasWallet } from "@/lib/wallet";
-import { MiningConfig } from "@/lib/miner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export default function MinerPage() {
-  const { 
-    wallet, 
+  const {
     isLocked,
+    address,
+    balance,
+    isMining,
     miningStats,
+    blockchainStats,
     startMining,
     stopMining,
-    isMining
+    refreshMiningStats,
   } = useWallet();
-  const [config, setConfig] = useState<MiningConfig>({
-    difficulty: 2, // Updated to match new easier difficulty
-    blockReward: 0.005, // Updated to match new higher rewards
-    maxWorkers: 4,
-    updateInterval: 500, // Updated to match new faster updates
-  });
-  const [showConfig, setShowConfig] = useState(false);
-  const router = useRouter();
 
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // Auto-refresh stats every 2 seconds when mining
   useEffect(() => {
-    // Check if wallet exists, if not redirect to onboarding
-    if (!hasWallet()) {
-      router.push("/onboarding");
-      return;
+    if (isMining) {
+      const interval = setInterval(() => {
+        refreshMiningStats();
+      }, 2000);
+      return () => clearInterval(interval);
     }
-
-    // Check if wallet is locked, if so redirect to dashboard
-    if (isLocked) {
-      router.push("/dashboard");
-      return;
-    }
-
-    // Load current mining config with easier settings
-    setConfig({
-      difficulty: 2, // Much easier to mine!
-      blockReward: 0.005, // More generous rewards!
-      maxWorkers: 4,
-      updateInterval: 500, // More responsive updates
-    });
-  }, [router, isLocked]);
+  }, [isMining, refreshMiningStats]);
 
   const handleStartMining = async () => {
+    setError(null);
+    setLoading(true);
     try {
       await startMining();
-    } catch (error) {
-      console.error("Failed to start mining:", error);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start mining");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleStopMining = () => {
-    stopMining();
-  };
-
-  const handleConfigChange = (key: keyof MiningConfig, value: number) => {
-    const newConfig = { ...config, [key]: value };
-    setConfig(newConfig);
-    // Note: Config updates are now handled by the smart contract
-  };
-
-  const formatHashRate = (hashesPerSecond: number): string => {
-    if (hashesPerSecond >= 1000000) {
-      return `${(hashesPerSecond / 1000000).toFixed(2)} MH/s`;
-    } else if (hashesPerSecond >= 1000) {
-      return `${(hashesPerSecond / 1000).toFixed(2)} KH/s`;
-    } else {
-      return `${hashesPerSecond} H/s`;
+  const handleStopMining = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      await stopMining();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to stop mining");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const formatTime = (timestamp?: number): string => {
-    if (!timestamp) return "Never";
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString();
-  };
-
-  const getEstimatedReward = (): string => {
-    const hps = miningStats.hashesPerSecond;
-    const difficulty = miningStats.difficulty;
-    const blockReward = config.blockReward;
-    
-    // Simple estimation: higher difficulty = more time needed
-    // This is a very rough estimate
-    const estimatedTimePerBlock = Math.pow(16, difficulty) / hps;
-    const blocksPerHour = 3600 / estimatedTimePerBlock;
-    const rewardPerHour = blocksPerHour * blockReward;
-    
-    return rewardPerHour.toFixed(6);
-  };
+  if (isLocked) {
+    return (
+      <div className="min-h-screen p-4 md:p-8" style={{ 
+        background: 'linear-gradient(135deg, rgba(15, 15, 35, 0.8) 0%, rgba(26, 26, 46, 0.9) 100%), url("/dong-zhang-ILYVeUgPkmI-unsplash.jpg") no-repeat center center fixed',
+        backgroundSize: 'cover',
+        backgroundAttachment: 'fixed'
+      }}>
+        <div className="max-w-4xl mx-auto">
+          <Card className="bg-white/10 backdrop-blur-xl border-white/20">
+            <CardContent className="p-8 text-center">
+              <div className="text-4xl mb-4">🔒</div>
+              <h2 className="text-2xl font-bold text-white mb-4">Wallet Locked</h2>
+              <p className="text-blue-200 mb-6">
+                Please unlock your wallet to start mining NumiCoin.
+              </p>
+              <Button 
+                onClick={() => window.history.back()}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                Go Back
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen p-4 md:p-8 liquid-bg">
+    <div className="min-h-screen p-4 md:p-8" style={{ 
+      background: 'linear-gradient(135deg, rgba(15, 15, 35, 0.8) 0%, rgba(26, 26, 46, 0.9) 100%), url("/dong-zhang-ILYVeUgPkmI-unsplash.jpg") no-repeat center center fixed',
+      backgroundSize: 'cover',
+      backgroundAttachment: 'fixed'
+    }}>
       <div className="max-w-6xl mx-auto space-y-6">
         {/* Header */}
-        <Card>
-          <CardHeader>
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-              <div>
-                <CardTitle className="text-2xl md:text-3xl">NumiMiner</CardTitle>
-                <CardDescription className="text-lg mt-2">
-                  Mine NumiCoin with your device's computational power - Now easier than ever! ��
-                </CardDescription>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  onClick={() => router.push("/dashboard")}
-                  variant="outline"
-                  size="sm"
-                >
-                  Back to Dashboard
-                </Button>
-                <Button
-                  onClick={() => setShowConfig(!showConfig)}
-                  variant="outline"
-                  size="sm"
-                >
-                  {showConfig ? "Hide Config" : "Show Config"}
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-        </Card>
+        <div className="text-center space-y-4">
+          <h1 className="text-4xl md:text-6xl font-bold text-white mb-4">
+            ⛏️ NumiCoin Mining
+          </h1>
+          <p className="text-xl text-blue-200">
+            Mine The People's Coin - Completely FREE!
+          </p>
+          <Badge variant="secondary" className="text-lg px-4 py-2 bg-green-500/20 text-green-300 border-green-500/30">
+            💎 Zero Gas Costs • Blake3 Algorithm • Quantum Safe
+          </Badge>
+        </div>
 
-        {/* People's Coin Banner */}
-        <Card className="bg-gradient-to-r from-green-500/20 to-blue-500/20 border-green-500/30">
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <div className="text-2xl">🌟</div>
-              <div>
-                <h3 className="text-lg font-semibold text-green-200">NumiCoin - The People's Coin</h3>
-                <p className="text-green-100/80">
-                  Designed to be easy to mine and accessible to everyone. No initial distributions - 
-                  earn your coins through honest work!
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Free Mining Notice */}
+        <Alert className="bg-green-500/20 border-green-500/30">
+          <AlertDescription className="text-green-200">
+            <strong>🎉 FREE MINING!</strong> NumiCoin uses a custom blockchain with zero gas costs. 
+            Mine as much as you want without paying any fees. This is true "People's Coin" mining!
+          </AlertDescription>
+        </Alert>
 
         {/* Mining Controls */}
-        <Card>
+        <Card className="bg-white/10 backdrop-blur-xl border-white/20">
           <CardHeader>
-            <CardTitle>Mining Controls</CardTitle>
-            <CardDescription>
-              Start mining to earn NumiCoin rewards. The difficulty has been reduced to make mining accessible to everyone!
+            <CardTitle className="text-white text-2xl">Mining Controls</CardTitle>
+            <CardDescription className="text-blue-200">
+              Start or stop mining NumiCoin with your device's computational power
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="flex flex-col md:flex-row gap-4">
+          <CardContent className="space-y-4">
+            <div className="flex flex-col sm:flex-row gap-4">
               <Button
                 onClick={handleStartMining}
-                disabled={isMining()}
-                size="lg"
-                className="flex-1 h-16 text-lg font-semibold"
+                disabled={isMining || loading}
+                className="flex-1 h-16 text-lg font-semibold bg-green-600 hover:bg-green-700 text-white border-0"
               >
-                {isMining() ? (
+                {loading ? (
                   <div className="flex items-center gap-2">
                     <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                    Mining...
+                    Starting...
                   </div>
                 ) : (
-                  "🚀 Start Mining"
+                  <>
+                    <span className="text-2xl mr-2">🚀</span>
+                    Start Mining
+                  </>
                 )}
               </Button>
+              
               <Button
                 onClick={handleStopMining}
-                disabled={!isMining()}
-                variant="destructive"
-                size="lg"
-                className="flex-1 h-16 text-lg font-semibold"
+                disabled={!isMining || loading}
+                variant="outline"
+                className="flex-1 h-16 text-lg font-semibold border-red-500/30 text-red-300 hover:bg-red-500/10"
               >
+                <span className="text-2xl mr-2">⏹️</span>
                 Stop Mining
               </Button>
+            </div>
+
+            {error && (
+              <Alert className="bg-red-500/20 border-red-500/30">
+                <AlertDescription className="text-red-200">
+                  {error}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+              <div className="text-center p-4 rounded-lg bg-blue-500/20 border-blue-500/30">
+                <div className="text-2xl font-bold text-white">{balance.toFixed(3)}</div>
+                <div className="text-blue-200">NUMI Balance</div>
+              </div>
+              
+              <div className="text-center p-4 rounded-lg bg-purple-500/20 border-purple-500/30">
+                <div className="text-2xl font-bold text-white">{miningStats.blocksMined}</div>
+                <div className="text-purple-200">Blocks Mined</div>
+              </div>
             </div>
           </CardContent>
         </Card>
 
         {/* Mining Statistics */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <Card>
-            <CardContent className="p-6">
-              <h4 className="text-sm font-medium text-white/70 mb-2">Hash Rate</h4>
-              <p className="text-2xl font-bold gradient-text">
-                {formatHashRate(miningStats.hashesPerSecond)}
-              </p>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Personal Mining Stats */}
+          <Card className="bg-white/10 backdrop-blur-xl border-white/20">
+            <CardHeader>
+              <CardTitle className="text-white text-xl">Your Mining Stats</CardTitle>
+              <CardDescription className="text-blue-200">
+                Real-time statistics from your mining session
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="text-center p-3 rounded-lg bg-blue-500/20">
+                  <div className="text-lg font-bold text-white">
+                    {miningStats.hashRate.toLocaleString()}
+                  </div>
+                  <div className="text-sm text-blue-200">Hash Rate</div>
+                </div>
+                
+                <div className="text-center p-3 rounded-lg bg-green-500/20">
+                  <div className="text-lg font-bold text-white">
+                    {miningStats.totalHashes.toLocaleString()}
+                  </div>
+                  <div className="text-sm text-green-200">Total Hashes</div>
+                </div>
+                
+                <div className="text-center p-3 rounded-lg bg-purple-500/20">
+                  <div className="text-lg font-bold text-white">
+                    {miningStats.currentBlock}
+                  </div>
+                  <div className="text-sm text-purple-200">Current Block</div>
+                </div>
+                
+                <div className="text-center p-3 rounded-lg bg-yellow-500/20">
+                  <div className="text-lg font-bold text-white">
+                    {miningStats.difficulty}
+                  </div>
+                  <div className="text-sm text-yellow-200">Difficulty</div>
+                </div>
+              </div>
             </CardContent>
           </Card>
-          
-          <Card>
-            <CardContent className="p-6">
-              <h4 className="text-sm font-medium text-white/70 mb-2">Total Hashes</h4>
-              <p className="text-2xl font-bold gradient-text">
-                {miningStats.totalHashes.toLocaleString()}
-              </p>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardContent className="p-6">
-              <h4 className="text-sm font-medium text-white/70 mb-2">Block Reward</h4>
-              <p className="text-2xl font-bold gradient-text">
-                {config.blockReward} NUMI
-              </p>
-              <Badge variant="success" className="mt-2">Increased Rewards!</Badge>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardContent className="p-6">
-              <h4 className="text-sm font-medium text-white/70 mb-2">Current Block</h4>
-              <p className="text-2xl font-bold gradient-text">
-                #{miningStats.currentBlock}
-              </p>
+
+          {/* Blockchain Stats */}
+          <Card className="bg-white/10 backdrop-blur-xl border-white/20">
+            <CardHeader>
+              <CardTitle className="text-white text-xl">NumiCoin Blockchain</CardTitle>
+              <CardDescription className="text-blue-200">
+                Global blockchain statistics
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="text-center p-3 rounded-lg bg-blue-500/20">
+                  <div className="text-lg font-bold text-white">
+                    {blockchainStats.totalBlocks}
+                  </div>
+                  <div className="text-sm text-blue-200">Total Blocks</div>
+                </div>
+                
+                <div className="text-center p-3 rounded-lg bg-green-500/20">
+                  <div className="text-lg font-bold text-white">
+                    {blockchainStats.totalSupply.toFixed(3)}
+                  </div>
+                  <div className="text-sm text-green-200">Total Supply</div>
+                </div>
+                
+                <div className="text-center p-3 rounded-lg bg-purple-500/20">
+                  <div className="text-lg font-bold text-white">
+                    {blockchainStats.activeMiners}
+                  </div>
+                  <div className="text-sm text-purple-200">Active Miners</div>
+                </div>
+                
+                <div className="text-center p-3 rounded-lg bg-yellow-500/20">
+                  <div className="text-lg font-bold text-white">
+                    {blockchainStats.averageBlockTime.toFixed(1)}s
+                  </div>
+                  <div className="text-sm text-yellow-200">Avg Block Time</div>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>
 
-        {/* Mining Status */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Mining Status</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <h4 className="text-sm font-medium text-white/70 mb-2">Status</h4>
-                <div className="flex items-center gap-2">
-                  <div className={`w-3 h-3 rounded-full ${isMining() ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                  <span className="text-white/90">
-                    {isMining() ? 'Active' : 'Inactive'}
-                  </span>
-                </div>
-              </div>
-              
-              <div>
-                <h4 className="text-sm font-medium text-white/70 mb-2">Difficulty</h4>
-                <div className="flex items-center gap-2">
-                  <p className="text-white/90">{miningStats.difficulty} leading zeros</p>
-                  <Badge variant="success">Easy Mining!</Badge>
-                </div>
-              </div>
-              
-              <div>
-                <h4 className="text-sm font-medium text-white/70 mb-2">Current Block</h4>
-                <p className="text-white/90">#{miningStats.currentBlock}</p>
-              </div>
-              
-              <div>
-                <h4 className="text-sm font-medium text-white/70 mb-2">Last Mine Time</h4>
-                <p className="text-white/90">{formatTime(miningStats.lastMineTime)}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Estimated Rewards */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Estimated Rewards</CardTitle>
-            <CardDescription>
-              Based on current hash rate and difficulty
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div>
-                <h4 className="text-sm font-medium text-white/70 mb-2">Per Hour</h4>
-                <p className="text-xl font-bold gradient-text">
-                  {getEstimatedReward()} NUMI
-                </p>
-              </div>
-              
-              <div>
-                <h4 className="text-sm font-medium text-white/70 mb-2">Per Day</h4>
-                <p className="text-xl font-bold gradient-text">
-                  {(parseFloat(getEstimatedReward()) * 24).toFixed(6)} NUMI
-                </p>
-              </div>
-              
-              <div>
-                <h4 className="text-sm font-medium text-white/70 mb-2">Per Week</h4>
-                <p className="text-xl font-bold gradient-text">
-                  {(parseFloat(getEstimatedReward()) * 24 * 7).toFixed(6)} NUMI
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Configuration Panel */}
-        {showConfig && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Mining Configuration</CardTitle>
-              <CardDescription>
-                Current settings for NumiCoin mining
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm font-medium text-white/90 mb-2">
-                    Difficulty: {config.difficulty}
-                  </label>
-                  <p className="text-xs text-white/60 mb-4">
-                    Reduced from 4 to 2 - much easier to mine!
-                  </p>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-white/90 mb-2">
-                    Block Reward: {config.blockReward} NUMI
-                  </label>
-                  <p className="text-xs text-white/60 mb-4">
-                    Increased from 0.001 to 0.005 - more generous!
-                  </p>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-white/90 mb-2">
-                    Max Workers: {config.maxWorkers}
-                  </label>
-                  <p className="text-xs text-white/60 mb-4">
-                    Uses your device's CPU cores efficiently
-                  </p>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-white/90 mb-2">
-                    Update Interval: {config.updateInterval}ms
-                  </label>
-                  <p className="text-xs text-white/60 mb-4">
-                    Faster updates for better user experience
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Mining Tips */}
-        <Card className="bg-blue-500/10 border-blue-500/30">
+        {/* Mining Information */}
+        <Card className="bg-gradient-to-r from-blue-500/20 to-purple-500/20 border-blue-500/30">
           <CardContent className="p-6">
-            <h3 className="text-lg font-semibold text-blue-200 mb-4">💡 Mining Tips</h3>
-            <ul className="space-y-2 text-blue-100/80">
-              <li>• NumiCoin is designed to be easy to mine - perfect for beginners!</li>
-              <li>• Keep your browser tab open while mining for best results</li>
-              <li>• The difficulty adjusts automatically to keep mining accessible</li>
-              <li>• Earn rewards every time you successfully mine a block</li>
-              <li>• No special hardware required - your regular device works great!</li>
-            </ul>
+            <h3 className="text-xl font-semibold text-white mb-4">How NumiCoin Mining Works</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-blue-100">
+              <div>
+                                 <h4 className="font-semibold text-white mb-2">🔬 Blake3 Algorithm (Quantum-Safe)</h4>
+                <ul className="space-y-1 text-sm">
+                  <li>• Quantum-safe cryptographic hash function</li>
+                  <li>• Faster and more secure than SHA-256</li>
+                  <li>• Optimized for modern hardware</li>
+                  <li>• Resistant to future quantum attacks</li>
+                </ul>
+              </div>
+              
+              <div>
+                <h4 className="font-semibold text-white mb-2">💎 Free Mining</h4>
+                <ul className="space-y-1 text-sm">
+                  <li>• Zero gas costs - mine for free!</li>
+                  <li>• 0.005 NUMI reward per block</li>
+                  <li>• Custom blockchain implementation</li>
+                  <li>• True "People's Coin" philosophy</li>
+                </ul>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Wallet Info */}
+        <Card className="bg-white/10 backdrop-blur-xl border-white/20">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-white">Mining Address</h3>
+                <p className="text-blue-200 text-sm font-mono">{address}</p>
+              </div>
+              <Badge variant="secondary" className="bg-green-500/20 text-green-300 border-green-500/30">
+                Connected
+              </Badge>
+            </div>
           </CardContent>
         </Card>
       </div>

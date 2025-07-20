@@ -1,43 +1,14 @@
-import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import { WalletProvider } from "@/context/WalletContext";
-import { PWAInstall } from "@/components/PWAInstall";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Numi Wallet - Secure Cryptocurrency Wallet",
-  description: "A beautiful, secure, and modern cryptocurrency wallet built with Next.js and ethers.js. Send, receive, and manage your ETH with ease.",
-  keywords: "cryptocurrency, wallet, ethereum, ETH, blockchain, secure, modern",
-  authors: [{ name: "Numi Wallet Team" }],
-  openGraph: {
-    title: "Numi Wallet - Secure Cryptocurrency Wallet",
-    description: "A beautiful, secure, and modern cryptocurrency wallet built with Next.js and ethers.js.",
-    type: "website",
-    locale: "en_US",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Numi Wallet - Secure Cryptocurrency Wallet",
-    description: "A beautiful, secure, and modern cryptocurrency wallet built with Next.js and ethers.js.",
-  },
+  title: "NumiCoin - The People's Coin",
+  description: "Easy to mine, fair to earn. Mine NumiCoin with your device's computational power.",
   manifest: "/manifest.json",
-};
-
-export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  maximumScale: 1,
-  themeColor: "#3B82F6",
 };
 
 export default function RootLayout({
@@ -46,14 +17,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="h-full">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased h-full liquid-bg bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900`}
-      >
+    <html lang="en" className="dark">
+      <body className={`${inter.className} dark`} style={{ 
+        background: 'linear-gradient(135deg, rgba(15, 15, 35, 0.8) 0%, rgba(26, 26, 46, 0.9) 100%), url("/dong-zhang-ILYVeUgPkmI-unsplash.jpg") no-repeat center center fixed',
+        backgroundSize: 'cover',
+        backgroundAttachment: 'fixed',
+        minHeight: '100vh',
+        color: 'white'
+      }}>
         <WalletProvider>
           {children}
         </WalletProvider>
-        <PWAInstall />
       </body>
     </html>
   );

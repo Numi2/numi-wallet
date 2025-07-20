@@ -1,218 +1,218 @@
-# NumiCoin Deployment Guide
+# NumiCoin Mainnet Deployment Guide
 
-This guide will walk you through deploying the complete NumiCoin mining ecosystem with real smart contracts.
+## 🚀 **Making NumiCoin Real - Complete Deployment Guide**
 
-## Prerequisites
+### **Prerequisites**
 
-- Node.js 18+ and npm
-- MetaMask or similar wallet
-- Testnet ETH (for testnet deployment)
-- Git
+1. **Ethereum Wallet with ETH**
+   - At least 3-4 ETH for deployment costs
+   - Private key for deployment account
 
-## Quick Start
+2. **API Keys**
+   - Infura/Alchemy RPC endpoint
+   - Etherscan API key for contract verification
 
-### 1. Install Dependencies
+3. **Development Environment**
+   - Node.js and npm installed
+   - Hardhat configured
 
-```bash
-# Install frontend dependencies
-npm install
+## 📋 **Step 1: Environment Setup**
 
-# Install smart contract dependencies
-cd contracts
-npm install
-```
+Create a `.env` file in the project root:
 
-### 2. Deploy Smart Contracts
+```env
+# Ethereum Mainnet Configuration
+MAINNET_RPC_URL=https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID
+GOERLI_RPC_URL=https://goerli.infura.io/v3/YOUR_INFURA_PROJECT_ID
 
-#### Option A: Local Development (Recommended for testing)
-
-```bash
-# Start local Hardhat node
-cd contracts
-npm run node
-
-# In a new terminal, deploy contracts
-npm run setup-ecosystem
-```
-
-#### Option B: Testnet Deployment
-
-```bash
-# Set up environment variables
-cd contracts
-cp .env.example .env
-
-# Edit .env with your configuration
+# Deployment Account
 PRIVATE_KEY=your_private_key_here
-SEPOLIA_URL=https://sepolia.infura.io/v3/your_project_id
-ETHERSCAN_API_KEY=your_etherscan_api_key
 
-# Deploy to Sepolia testnet
-npm run setup-ecosystem -- --network sepolia
+# API Keys
+ETHERSCAN_API_KEY=your_etherscan_api_key_here
+COINMARKETCAP_API_KEY=your_coinmarketcap_api_key_here
+
+# Gas Reporting
+REPORT_GAS=true
 ```
 
-#### Option C: Mainnet Deployment
+## 🔧 **Step 2: Install Dependencies**
 
 ```bash
-# Set up environment variables for mainnet
-cd contracts
-cp .env.example .env
-
-# Edit .env with mainnet configuration
-PRIVATE_KEY=your_private_key_here
-MAINNET_URL=https://mainnet.infura.io/v3/your_project_id
-ETHERSCAN_API_KEY=your_etherscan_api_key
-
-# Deploy to mainnet (BE CAREFUL!)
-npm run setup-ecosystem -- --network mainnet
+npm install
+npm install --save-dev @nomicfoundation/hardhat-toolbox dotenv
 ```
 
-### 3. Configure Frontend
+## 🧪 **Step 3: Test on Testnet (Recommended)**
 
-After deployment, the script will generate configuration files. Copy the environment variables to your frontend:
+Before deploying to mainnet, test on Goerli testnet:
 
 ```bash
-# Copy generated environment file
-cp contracts/.env.local .env.local
+# Deploy to Goerli testnet
+npx hardhat run scripts/deploy-numicoin.js --network goerli
 
-# Or manually add to your .env.local:
-NEXT_PUBLIC_NUMICOIN_ADDRESS=0x...
-NEXT_PUBLIC_MINING_POOL_ADDRESS=0x...
-NEXT_PUBLIC_RPC_URL=your_rpc_url
+# Set the environment variable for mining pool
+export NUMICOIN_ADDRESS=0x... # Address from previous deployment
+
+# Deploy mining pool
+npx hardhat run scripts/deploy-mining-pool.js --network goerli
 ```
 
-### 4. Start the Application
+## 🚀 **Step 4: Deploy to Ethereum Mainnet**
+
+### **4.1 Deploy NumiCoin Contract**
 
 ```bash
-# Start the development server
-npm run dev
+# Deploy the main token contract
+npx hardhat run scripts/deploy-numicoin.js --network mainnet
 ```
 
-## Smart Contract Details
-
-### NumiCoin Contract
-- **Token**: ERC-20 compliant with 18 decimals
-- **Mining**: Proof-of-work with dynamic difficulty
-- **Rewards**: 100 NUMI per block (reduced for consecutive mining)
-- **Features**: Anti-spam measures, real-time statistics
-
-### Mining Pool Contract
-- **Staking**: Minimum 100 NUMI, maximum 10,000 NUMI
-- **Rewards**: Proportional to stake amount
-- **Fees**: 5% pool fee
-- **Features**: Flexible entry/exit, automatic distribution
-
-## Testing
-
-### Run Tests
-```bash
-cd contracts
-npm test
+**Expected Output:**
+```
+🚀 Deploying NumiCoin to Ethereum Mainnet...
+Deploying contracts with account: 0x...
+Account balance: 4000000000000000000
+📝 Deploying NumiCoin contract...
+✅ NumiCoin deployed to: 0x...
+📊 Contract Details:
+   - Initial Difficulty: 2
+   - Block Reward: 0.005 NUMI
+   - Target Block Time: 600 seconds
+   - Governance Threshold: 1000.0 NUMI
+   - Owner: 0x...
 ```
 
-### Test Mining
-1. Start the application
-2. Create or import a wallet
-3. Navigate to the mining page
-4. Start mining and watch for block confirmations
-
-### Test Pool
-1. Mine some NUMI tokens
-2. Join the mining pool with your tokens
-3. Monitor pool rewards
-4. Claim rewards or leave the pool
-
-## Verification
-
-### Verify on Etherscan
-```bash
-cd contracts
-npx hardhat verify --network sepolia 0x... # NumiCoin address
-npx hardhat verify --network sepolia 0x... "0x..." # MiningPool address with NumiCoin address
-```
-
-## Monitoring
-
-### Contract Events
-Monitor these events for mining activity:
-- `BlockMined`: New blocks found
-- `DifficultyAdjusted`: Difficulty changes
-- `MinerJoined/Left`: Pool activity
-- `RewardsClaimed`: Reward distributions
-
-### Block Explorer
-- **Sepolia**: https://sepolia.etherscan.io
-- **Polygon**: https://polygonscan.com
-- **Mainnet**: https://etherscan.io
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Insufficient Gas**
-   - Increase gas limit for mining transactions
-   - Use higher gas prices during network congestion
-
-2. **Contract Not Found**
-   - Verify contract addresses in environment variables
-   - Check network configuration
-
-3. **Mining Not Working**
-   - Ensure wallet is connected
-   - Check if contracts are deployed
-   - Verify RPC URL is correct
-
-4. **Pool Issues**
-   - Check minimum/maximum stake requirements
-   - Ensure sufficient NUMI balance
-   - Verify pool contract is properly linked
-
-### Debug Commands
+### **4.2 Deploy MiningPool Contract**
 
 ```bash
-# Check contract state
-cd contracts
-npx hardhat console --network localhost
-> const contract = await ethers.getContractAt("NumiCoin", "0x...")
-> await contract.getMiningStats()
+# Set the NumiCoin address from previous deployment
+export NUMICOIN_ADDRESS=0x... # Address from step 4.1
 
-# Check deployment
-cat deployment.json
+# Deploy the mining pool contract
+npx hardhat run scripts/deploy-mining-pool.js --network mainnet
 ```
 
-## Security Considerations
+**Expected Output:**
+```
+🚀 Deploying MiningPool to Ethereum Mainnet...
+📝 Using NumiCoin address: 0x...
+📝 Deploying MiningPool contract...
+✅ MiningPool deployed to: 0x...
+📊 Contract Details:
+   - NumiCoin Address: 0x...
+   - Pool Fee: 200 basis points (2%)
+   - Owner: 0x...
+```
 
-### Before Mainnet
-- [ ] Audit smart contracts
-- [ ] Test thoroughly on testnets
-- [ ] Verify all contract addresses
-- [ ] Set up monitoring and alerts
-- [ ] Have emergency procedures ready
+## ✅ **Step 5: Verify Contracts on Etherscan**
 
-### Best Practices
-- Use hardware wallets for mainnet deployment
-- Keep private keys secure
-- Monitor contract events
-- Regular security updates
-- Community feedback and testing
+### **5.1 Verify NumiCoin Contract**
 
-## Support
+```bash
+npx hardhat verify --network mainnet 0xNUMICOIN_ADDRESS 2 "5000000000000000" 600 "1000000000000000000000" "0xOWNER_ADDRESS"
+```
 
-If you encounter issues:
-1. Check the troubleshooting section
-2. Review contract documentation
-3. Test on local network first
-4. Create an issue on GitHub
+### **5.2 Verify MiningPool Contract**
 
-## Next Steps
+```bash
+npx hardhat verify --network mainnet 0xMININGPOOL_ADDRESS 0xNUMICOIN_ADDRESS 200 "0xOWNER_ADDRESS"
+```
 
-After successful deployment:
-1. **Marketing**: Promote your mining ecosystem
-2. **Community**: Build a mining community
-3. **Features**: Add more advanced mining features
-4. **Scaling**: Optimize for higher transaction volumes
-5. **Governance**: Implement DAO governance
+## 🔄 **Step 6: Update Frontend**
+
+### **6.1 Update Environment Variables**
+
+Add these to your Vercel environment variables:
+
+```env
+NEXT_PUBLIC_NUMICOIN_ADDRESS=0x... # From step 4.1
+NEXT_PUBLIC_MINING_POOL_ADDRESS=0x... # From step 4.2
+NEXT_PUBLIC_RPC_URL=https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID
+NEXT_PUBLIC_CHAIN_ID=1
+NEXT_PUBLIC_EXPLORER_URL=https://etherscan.io
+```
+
+### **6.2 Deploy Updated Frontend**
+
+```bash
+vercel --prod
+```
+
+## 🎯 **Step 7: Test Real Mining**
+
+1. **Visit the deployed app**
+2. **Create or import a wallet**
+3. **Navigate to the miner page**
+4. **Start mining real NUMI tokens**
+5. **Verify rewards in your wallet**
+
+## 💰 **Cost Breakdown**
+
+### **Deployment Costs**
+- **NumiCoin Contract**: ~1.5-2 ETH (~$3,000-4,000)
+- **MiningPool Contract**: ~1-1.5 ETH (~$2,000-3,000)
+- **Total**: ~2.5-3.5 ETH (~$5,000-7,000)
+
+### **User Mining Costs**
+- **Gas per block**: ~50,000-100,000 gas
+- **Cost per block**: ~$10-50 (depending on gas prices)
+- **Users pay their own gas fees**
+
+## 🚨 **Important Notes**
+
+### **Security Considerations**
+- **Private Key Security**: Never commit private keys to git
+- **Contract Ownership**: Keep owner private key secure
+- **Emergency Functions**: Available for adjustments if needed
+
+### **Economic Considerations**
+- **Difficulty Adjustment**: Monitors and adjusts automatically
+- **Gas Optimization**: Contracts optimized for efficiency
+- **Fair Distribution**: No initial token distribution
+
+### **User Experience**
+- **Gas Estimation**: Frontend shows estimated gas costs
+- **Network Detection**: Warns users if not on mainnet
+- **Error Handling**: Clear error messages for users
+
+## 📊 **Monitoring and Maintenance**
+
+### **Post-Deployment Tasks**
+1. **Monitor contract activity** on Etherscan
+2. **Track mining difficulty** and adjust if needed
+3. **Monitor gas prices** and optimize if necessary
+4. **Gather user feedback** and iterate
+5. **Community building** and marketing
+
+### **Emergency Procedures**
+- **Difficulty Adjustment**: Use owner functions if needed
+- **Gas Optimization**: Update contracts if gas costs too high
+- **Bug Fixes**: Deploy new contracts if critical issues found
+
+## 🎉 **Launch Checklist**
+
+- [ ] Contracts deployed to mainnet
+- [ ] Contracts verified on Etherscan
+- [ ] Frontend updated with contract addresses
+- [ ] Environment variables configured
+- [ ] Mining functionality tested
+- [ ] Staking functionality tested
+- [ ] Governance functionality tested
+- [ ] Community announcement prepared
+- [ ] Monitoring tools set up
+
+## 🌟 **The Result**
+
+After successful deployment, NumiCoin will be:
+
+- **Real ERC-20 token** on Ethereum mainnet
+- **Mineable by anyone** with a computer
+- **Fair distribution** through mining only
+- **Democratic governance** through staking
+- **Accessible to everyone** (easy mining)
+
+**NumiCoin - The People's Coin** will be live on the Ethereum blockchain! 🚀
 
 ---
 
-**Remember**: Always test thoroughly before mainnet deployment. The contracts are production-ready but should be audited for your specific use case. 
+**Need help?** Check the troubleshooting section or reach out to the community. 

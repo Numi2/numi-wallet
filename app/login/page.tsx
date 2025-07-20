@@ -2,149 +2,118 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useWallet } from "@/context/WalletContext";
-import { hasWallet } from "@/lib/wallet";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useWallet } from "@/context/WalletContext";
 
 export default function LoginPage() {
-  const [recoveryPhrase, setRecoveryPhrase] = useState("");
-  const [error, setError] = useState("");
   const [isClient, setIsClient] = useState(false);
-  const [hasExistingWallet, setHasExistingWallet] = useState(false);
-  const { unlock, loading } = useWallet();
+  const [recoveryPhrase, setRecoveryPhrase] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+  const { unlockWallet, isLocked } = useWallet();
   const router = useRouter();
 
-  // Client-side check to prevent SSR issues
   useEffect(() => {
     setIsClient(true);
-    setHasExistingWallet(hasWallet());
   }, []);
 
-  // Redirect if no wallet exists (only after client-side check)
-  useEffect(() => {
-    if (isClient && !hasExistingWallet) {
-      router.push("/onboarding");
-    }
-  }, [isClient, hasExistingWallet, router]);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError("");
 
-  // Don't render anything until client-side check is complete
+    try {
+      await unlockWallet("numicoin");
+      router.push("/dashboard");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to unlock wallet");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleBack = () => {
+    router.push("/");
+  };
+
   if (!isClient) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 liquid-bg">
-        <div className="w-full max-w-md">
-          <Card className="text-center">
-            <CardContent className="p-8">
-              <div className="w-12 h-12 border-4 border-white/20 border-t-white/60 rounded-full animate-spin mx-auto mb-4"></div>
-              <p className="text-white/70">Loading...</p>
-            </CardContent>
-          </Card>
-        </div>
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <Card className="w-full max-w-md">
+          <CardContent className="p-8 text-center">
+            <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-muted-foreground">Loading...</p>
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
-  // Don't render login form if no wallet exists
-  if (!hasExistingWallet) {
-    return null;
-  }
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    
-    // Validate recovery phrase
-    const words = recoveryPhrase.trim().split(' ');
-    if (words.length !== 12) {
-      setError("Please enter your complete 12-word recovery phrase");
-      return;
-    }
-    
-    try {
-      // Unlock the wallet context with recovery phrase
-      await unlock(recoveryPhrase.trim());
-      router.push("/dashboard");
-    } catch (err) {
-      setError("Invalid recovery phrase. Please check your 12 words and try again.");
-    }
-  };
-
-  const handleCreateNewWallet = () => {
-    // Clear existing wallet and redirect to onboarding
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("numi_wallet_encrypted");
-    }
-    router.push("/onboarding");
-  };
-
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 liquid-bg">
-      <div className="w-full max-w-md">
-        <Card className="text-center">
-          <CardHeader>
-            <div className="w-20 h-20 glass-card mx-auto mb-6 flex items-center justify-center">
-              <span className="text-3xl">🔐</span>
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader className="space-y-4">
+          <div className="text-center">
+            <div className="w-16 h-16 bg-gradient-to-br from-primary to-primary/60 rounded-2xl mx-auto mb-4 flex items-center justify-center">
+              <span className="text-2xl">🔐</span>
             </div>
-            <CardTitle className="text-3xl mb-2">Welcome Back</CardTitle>
-            <CardDescription>Enter your recovery phrase to unlock your wallet</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleLogin} className="space-y-6">
-              <div>
-                <label htmlFor="recoveryPhrase" className="block text-sm font-medium text-white/90 mb-2">
-                  Recovery Phrase
-                </label>
-                <Textarea
-                  id="recoveryPhrase"
-                  value={recoveryPhrase}
-                  onChange={(e) => setRecoveryPhrase(e.target.value)}
-                  className="w-full h-24 resize-none"
-                  placeholder="Enter your 12-word recovery phrase"
-                  disabled={loading}
-                  autoFocus
-                />
-                <p className="text-xs text-white/60 mt-2">
-                  Enter all 12 words in order, separated by spaces
-                </p>
-              </div>
+            <CardTitle className="text-2xl">Unlock Wallet</CardTitle>
+            <CardDescription>
+              Enter your recovery phrase to access your NumiCoin wallet
+            </CardDescription>
+          </div>
+        </CardHeader>
 
-              {error && (
-                <div className="p-3 rounded-md bg-red-500/20 border border-red-500/30 text-red-200">
-                  {error}
-                </div>
-              )}
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="space-y-2">
+              <Label htmlFor="recoveryPhrase">Recovery Phrase</Label>
+              <Textarea
+                id="recoveryPhrase"
+                value={recoveryPhrase}
+                onChange={(e) => setRecoveryPhrase(e.target.value)}
+                placeholder="Enter your 12-word recovery phrase"
+                className="min-h-[120px] resize-none"
+                disabled={isLoading}
+              />
+              <p className="text-xs text-muted-foreground">
+                Enter all 12 words in order, separated by spaces
+              </p>
+            </div>
 
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="space-y-3">
               <Button
                 type="submit"
-                disabled={loading || recoveryPhrase.trim().split(' ').length !== 12}
+                disabled={isLoading || recoveryPhrase.trim().split(' ').length !== 12}
                 className="w-full"
               >
-                {loading ? "Unlocking..." : "Unlock Wallet"}
+                {isLoading ? "Unlocking..." : "Unlock Wallet"}
               </Button>
-            </form>
-
-            <div className="mt-8 pt-6 border-t border-white/20">
-              <p className="text-sm text-white/60 mb-4">
-                Don't have a wallet or want to create a new one?
-              </p>
+              
               <Button
-                onClick={handleCreateNewWallet}
+                type="button"
                 variant="outline"
+                onClick={handleBack}
                 className="w-full"
+                disabled={isLoading}
               >
-                Create New Wallet
+                Back to Home
               </Button>
             </div>
-
-            <div className="mt-6 p-4 rounded-md bg-blue-500/10 border border-blue-500/30">
-              <p className="text-sm text-blue-200">
-                💡 Keep your recovery phrase safe and secret. Anyone with these words can access your wallet.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 } 

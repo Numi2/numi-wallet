@@ -1,391 +1,347 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { Wallet, HDNodeWallet, ethers } from "ethers";
-import { 
-  loadWallet, 
-  loadWalletFromPhrase,
-  hasWallet, 
-  getBalance, 
-  getTransactionHistory,
-  sendTransaction,
-  isValidAddress,
-  getProvider
-} from "@/lib/wallet";
-import { 
-  ContractMiner,
-  ContractMiningStats,
-  MinerStats,
-  PoolStats,
-  PoolMinerInfo
-} from "@/lib/contractMiner";
-import { 
-  initSessionMonitoring, 
-  updateActivity, 
-  clearSession,
-  isSessionExpired 
-} from "@/lib/session";
-
-interface Transaction {
-  hash: string;
-  from: string;
-  to: string;
-  value: string;
-  gasPrice?: string;
-  gasLimit?: string;
-  blockNumber?: number;
-  timestamp?: number;
-  type: 'sent' | 'received';
-}
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { ethers } from "ethers";
+import { createWallet, importWallet, hasWallet, getWallet, lockWallet } from "@/lib/wallet";
+import { NumiBlockchain, NumiMiner } from "@/lib/numiBlockchain";
 
 interface WalletContextType {
-  wallet: Wallet | HDNodeWallet | null;
-  loading: boolean;
-  error?: string;
-  balance: string;
-  transactions: Transaction[];
-  balanceLoading: boolean;
-  transactionsLoading: boolean;
+  // Wallet state
   isLocked: boolean;
-  unlock: (recoveryPhrase: string) => Promise<void>;
-  lock: () => void;
-  clearError: () => void;
-  refreshBalance: () => Promise<void>;
-  refreshTransactions: () => Promise<void>;
-  sendTransaction: (toAddress: string, amount: string) => Promise<string>;
-  // Mining functionality
-  miningStats: ContractMiningStats;
-  minerStats: MinerStats | null;
-  poolStats: PoolStats | null;
-  poolMinerInfo: PoolMinerInfo | null;
+  wallet: ethers.Wallet | null;
+  address: string | null;
+  balance: number;
+  
+  // Mining state
+  isMining: boolean;
+  miningStats: {
+    hashRate: number;
+    totalHashes: number;
+    blocksMined: number;
+    currentBlock: number;
+    difficulty: number;
+  };
+  blockchainStats: {
+    totalBlocks: number;
+    totalSupply: number;
+    currentDifficulty: number;
+    averageBlockTime: number;
+    activeMiners: number;
+    lastBlockTime: number;
+  };
+  
+  // Transactions
+  transactions: any[];
+  
+  // Session
+  sessionTimeout: number;
+  lastActivity: number;
+  
+  // Functions
+  createNewWallet: () => Promise<void>;
+  importExistingWallet: (recoveryPhrase: string) => Promise<void>;
+  unlockWallet: (password: string) => Promise<void>;
+  lockWallet: () => void;
   startMining: () => Promise<void>;
-  stopMining: () => void;
-  isMining: () => boolean;
-  joinPool: (amount: string) => Promise<void>;
-  leavePool: () => Promise<void>;
-  claimPoolRewards: () => Promise<void>;
-  refreshMiningStats: () => Promise<void>;
+  stopMining: () => Promise<void>;
+  refreshMiningStats: () => void;
+  refreshBalance: () => void;
+  updateSessionTimeout: (timeout: number) => void;
 }
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
-interface WalletProviderProps {
-  children: ReactNode;
-}
+export const useWallet = () => {
+  const context = useContext(WalletContext);
+  if (context === undefined) {
+    throw new Error("useWallet must be used within a WalletProvider");
+  }
+  return context;
+};
 
-export function WalletProvider({ children }: WalletProviderProps) {
-  const [wallet, setWallet] = useState<Wallet | HDNodeWallet | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
-  const [balance, setBalance] = useState<string>("0");
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [balanceLoading, setBalanceLoading] = useState(false);
-  const [transactionsLoading, setTransactionsLoading] = useState(false);
+export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Wallet state
   const [isLocked, setIsLocked] = useState(true);
-  const [miningStats, setMiningStats] = useState<ContractMiningStats>({
-    currentBlock: 1,
-    difficulty: 4,
-    blockReward: "0",
-    lastMineTime: 0,
-    targetMineTime: 600,
-    hashesPerSecond: 0,
+  const [wallet, setWallet] = useState<ethers.Wallet | null>(null);
+  const [address, setAddress] = useState<string | null>(null);
+  const [balance, setBalance] = useState(0);
+  
+  // Mining state
+  const [isMining, setIsMining] = useState(false);
+  const [miningStats, setMiningStats] = useState({
+    hashRate: 0,
     totalHashes: 0,
-    isMining: false,
+    blocksMined: 0,
+    currentBlock: 0,
+    difficulty: 2
   });
-  const [minerStats, setMinerStats] = useState<MinerStats | null>(null);
-  const [poolStats, setPoolStats] = useState<PoolStats | null>(null);
-  const [poolMinerInfo, setPoolMinerInfo] = useState<PoolMinerInfo | null>(null);
-  const [contractMiner, setContractMiner] = useState<ContractMiner | null>(null);
+  const [blockchainStats, setBlockchainStats] = useState({
+    totalBlocks: 1,
+    totalSupply: 0,
+    currentDifficulty: 2,
+    averageBlockTime: 30,
+    activeMiners: 0,
+    lastBlockTime: Date.now()
+  });
+  
+  // Transactions
+  const [transactions, setTransactions] = useState<any[]>([]);
+  
+  // Session
+  const [sessionTimeout, setSessionTimeout] = useState(30 * 60 * 1000); // 30 minutes
+  const [lastActivity, setLastActivity] = useState(Date.now());
+  
+  // Blockchain and miner instances
+  const [blockchain] = useState(() => new NumiBlockchain());
+  const [miner, setMiner] = useState<NumiMiner | null>(null);
 
-  // Check if wallet exists on mount
+  // Initialize wallet on mount
   useEffect(() => {
-    const walletExists = hasWallet();
-    if (!walletExists) {
-      setWallet(null);
-      setIsLocked(true);
-    } else {
-      // Check if session is expired
-      if (isSessionExpired()) {
-        setIsLocked(true);
-        setWallet(null);
-      } else {
-        setIsLocked(false);
+    const initializeWallet = async () => {
+      if (hasWallet()) {
+        const savedWallet = getWallet();
+        if (savedWallet) {
+          setWallet(savedWallet);
+          setAddress(savedWallet.address);
+          setIsLocked(true); // Always start locked
+        }
       }
-    }
+    };
+
+    initializeWallet();
   }, []);
 
-  // Initialize session monitoring
+  // Initialize blockchain callbacks
   useEffect(() => {
-    if (wallet) {
-      const cleanup = initSessionMonitoring(() => {
-        // Auto-lock when session expires
-        lock();
+    blockchain.onBlockMined((block) => {
+      console.log('🎉 New block mined on NumiCoin blockchain!', block);
+      refreshBalance();
+    });
+
+    blockchain.onStatsUpdate((stats) => {
+      setBlockchainStats(stats);
+    });
+  }, [blockchain]);
+
+  // Session management
+  useEffect(() => {
+    const checkSession = () => {
+      const now = Date.now();
+      if (now - lastActivity > sessionTimeout && !isLocked) {
+        lockWallet();
+      }
+    };
+
+    const interval = setInterval(checkSession, 1000);
+    return () => clearInterval(interval);
+  }, [lastActivity, sessionTimeout, isLocked]);
+
+  // Activity tracking
+  useEffect(() => {
+    const updateActivity = () => {
+      setLastActivity(Date.now());
+    };
+
+    window.addEventListener('mousemove', updateActivity);
+    window.addEventListener('keypress', updateActivity);
+    window.addEventListener('click', updateActivity);
+
+    return () => {
+      window.removeEventListener('mousemove', updateActivity);
+      window.removeEventListener('keypress', updateActivity);
+      window.removeEventListener('click', updateActivity);
+    };
+  }, []);
+
+  // Create new wallet
+  const createNewWallet = async () => {
+    try {
+      const newWallet = await createWallet();
+      setWallet(newWallet);
+      setAddress(newWallet.address);
+      setIsLocked(false);
+      setLastActivity(Date.now());
+      
+      // Initialize miner for this wallet
+      const newMiner = new NumiMiner(blockchain, newWallet.address);
+      setMiner(newMiner);
+      
+      console.log('✅ New wallet created:', newWallet.address);
+    } catch (error) {
+      console.error('❌ Failed to create wallet:', error);
+      throw error;
+    }
+  };
+
+  // Import existing wallet
+  const importExistingWallet = async (recoveryPhrase: string) => {
+    try {
+      const importedWallet = await importWallet(recoveryPhrase);
+      setWallet(importedWallet);
+      setAddress(importedWallet.address);
+      setIsLocked(false);
+      setLastActivity(Date.now());
+      
+      // Initialize miner for this wallet
+      const newMiner = new NumiMiner(blockchain, importedWallet.address);
+      setMiner(newMiner);
+      
+      console.log('✅ Wallet imported:', importedWallet.address);
+    } catch (error) {
+      console.error('❌ Failed to import wallet:', error);
+      throw error;
+    }
+  };
+
+  // Unlock wallet
+  const unlockWallet = async (password: string) => {
+    try {
+      if (!wallet) {
+        throw new Error('No wallet to unlock');
+      }
+
+      // For now, we'll use a simple password check
+      // In a real implementation, you'd decrypt the wallet
+      const testPassword = 'numicoin'; // Simple test password
+      if (password !== testPassword) {
+        throw new Error('Incorrect password');
+      }
+
+      setIsLocked(false);
+      setLastActivity(Date.now());
+      
+      // Initialize miner if not already done
+      if (!miner) {
+        const newMiner = new NumiMiner(blockchain, wallet.address);
+        setMiner(newMiner);
+      }
+      
+      console.log('✅ Wallet unlocked');
+    } catch (error) {
+      console.error('❌ Failed to unlock wallet:', error);
+      throw error;
+    }
+  };
+
+  // Lock wallet
+  const lockWallet = () => {
+    setIsLocked(true);
+    stopMining();
+    console.log('🔒 Wallet locked');
+  };
+
+  // Start mining
+  const startMining = async () => {
+    try {
+      if (!miner) {
+        throw new Error('No miner available');
+      }
+
+      if (isMining) {
+        console.log('⛏️ Already mining');
+        return;
+      }
+
+      console.log('🚀 Starting NumiCoin mining (FREE!)...');
+      
+      // Set up miner callbacks
+      miner.onStatsUpdate((stats) => {
+        setMiningStats(stats);
       });
 
-      return cleanup;
-    }
-  }, [wallet]);
-
-  // Initialize mining functionality - temporarily disabled for deployment
-  // useEffect(() => {
-  //   if (wallet && !isLocked) {
-  //     const numiCoinAddress = process.env.NEXT_PUBLIC_NUMICOIN_ADDRESS;
-  //     const miningPoolAddress = process.env.NEXT_PUBLIC_MINING_POOL_ADDRESS;
-  //     
-  //     if (numiCoinAddress && miningPoolAddress) {
-  //       try {
-  //         const provider = getProvider();
-  //         const miner = new ContractMiner(numiCoinAddress, miningPoolAddress, provider);
-  //         miner.setWallet(wallet as ethers.Wallet);
-  //         
-  //         // Set up mining callbacks
-  //         miner.onStatsUpdate((stats) => {
-  //           setMiningStats(stats);
-  //         });
-  //         
-  //         miner.onBlockMined((result) => {
-  //           console.log("Block mined!", result);
-  //           // Refresh balance after mining reward
-  //           setTimeout(() => {
-  //             refreshBalance();
-  //             refreshMiningStats();
-  //           }, 1000);
-  //         });
-  //         
-  //         setContractMiner(miner);
-  //         
-  //         // Load initial stats
-  //         refreshMiningStats();
-  //       } catch (error) {
-  //         console.error("Failed to initialize mining:", error);
-  //       }
-  //     }
-  //   }
-  // }, [wallet, isLocked]);
-
-  // Fetch balance and transactions when wallet is loaded
-  useEffect(() => {
-    if (wallet && !isLocked) {
-      refreshBalance();
-      refreshTransactions();
-    }
-  }, [wallet, isLocked]);
-
-  const unlock = async (recoveryPhrase: string) => {
-    setLoading(true);
-    setError(undefined);
-    
-    try {
-      const loadedWallet = loadWalletFromPhrase(recoveryPhrase);
-      setWallet(loadedWallet);
-      setIsLocked(false);
-      updateActivity(); // Update session activity
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to unlock wallet";
-      setError(errorMessage);
-      setWallet(null);
-      setIsLocked(true);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const lock = () => {
-    setWallet(null);
-    setIsLocked(true);
-    clearSession();
-    setBalance("0");
-    setTransactions([]);
-    clearError();
-  };
-
-  const clearError = () => {
-    setError(undefined);
-  };
-
-  const refreshBalance = async () => {
-    if (!wallet || isLocked) return;
-    
-    setBalanceLoading(true);
-    try {
-      const walletBalance = await getBalance(wallet.address);
-      setBalance(walletBalance);
-      updateActivity(); // Update session activity
-    } catch (err) {
-      console.error("Error refreshing balance:", err);
-      setError("Failed to refresh balance");
-    } finally {
-      setBalanceLoading(false);
-    }
-  };
-
-  const refreshTransactions = async () => {
-    if (!wallet || isLocked) return;
-    
-    setTransactionsLoading(true);
-    try {
-      const walletTransactions = await getTransactionHistory(wallet.address, 20);
-      setTransactions(walletTransactions);
-      updateActivity(); // Update session activity
-    } catch (err) {
-      console.error("Error refreshing transactions:", err);
-      setError("Failed to refresh transactions");
-    } finally {
-      setTransactionsLoading(false);
-    }
-  };
-
-  const handleSendTransaction = async (toAddress: string, amount: string): Promise<string> => {
-    if (!wallet || isLocked) {
-      throw new Error("Wallet not loaded or locked");
-    }
-
-    if (!isValidAddress(toAddress)) {
-      throw new Error("Invalid recipient address");
-    }
-
-    if (parseFloat(amount) <= 0) {
-      throw new Error("Amount must be greater than 0");
-    }
-
-    if (parseFloat(amount) > parseFloat(balance)) {
-      throw new Error("Insufficient balance");
-    }
-
-    try {
-      const txHash = await sendTransaction(wallet as HDNodeWallet, toAddress, amount);
-      updateActivity(); // Update session activity
-      
-      // Refresh balance and transactions after successful send
-      setTimeout(() => {
+      miner.onBlockMined((block) => {
+        console.log('🎯 Block mined!', block);
         refreshBalance();
-        refreshTransactions();
-      }, 2000); // Wait a bit for transaction to be processed
+      });
+
+      // Start mining
+      await miner.startMining();
+      setIsMining(true);
       
-      return txHash;
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to send transaction";
-      throw new Error(errorMessage);
+      console.log('✅ Mining started successfully');
+    } catch (error) {
+      console.error('❌ Failed to start mining:', error);
+      throw error;
     }
   };
 
-  // Mining functions
-  const handleStartMining = async (): Promise<void> => {
-    if (!wallet || isLocked || !contractMiner) {
-      throw new Error("Wallet not loaded or mining not initialized");
-    }
-
+  // Stop mining
+  const stopMining = async () => {
     try {
-      await contractMiner.startMining();
-      updateActivity(); // Update session activity
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to start mining";
-      throw new Error(errorMessage);
+      if (!miner) {
+        return;
+      }
+
+      await miner.stopMining();
+      setIsMining(false);
+      
+      console.log('⏹️ Mining stopped');
+    } catch (error) {
+      console.error('❌ Failed to stop mining:', error);
+      throw error;
     }
   };
 
-  const handleStopMining = (): void => {
-    if (contractMiner) {
-      contractMiner.stopMining();
+  // Refresh mining stats
+  const refreshMiningStats = () => {
+    if (miner) {
+      const stats = miner.getStats();
+      setMiningStats(stats);
+    }
+    
+    const blockchainStats = blockchain.getStats();
+    setBlockchainStats(blockchainStats);
+  };
+
+  // Refresh balance
+  const refreshBalance = () => {
+    if (address) {
+      const balance = blockchain.getBalance(address);
+      setBalance(balance);
     }
   };
 
-  const handleIsMining = (): boolean => {
-    return contractMiner ? contractMiner.isMining() : false;
+  // Update session timeout
+  const updateSessionTimeout = (timeout: number) => {
+    setSessionTimeout(timeout);
   };
 
-  const handleJoinPool = async (amount: string): Promise<void> => {
-    if (!wallet || isLocked || !contractMiner) {
-      throw new Error("Wallet not loaded or mining not initialized");
+  // Auto-refresh balance when address changes
+  useEffect(() => {
+    if (address) {
+      refreshBalance();
     }
-
-    try {
-      await contractMiner.joinPool(amount);
-      await handleRefreshMiningStats();
-      updateActivity();
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to join pool";
-      throw new Error(errorMessage);
-    }
-  };
-
-  const handleLeavePool = async (): Promise<void> => {
-    if (!wallet || isLocked || !contractMiner) {
-      throw new Error("Wallet not loaded or mining not initialized");
-    }
-
-    try {
-      await contractMiner.leavePool();
-      await handleRefreshMiningStats();
-      updateActivity();
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to leave pool";
-      throw new Error(errorMessage);
-    }
-  };
-
-  const handleClaimPoolRewards = async (): Promise<void> => {
-    if (!wallet || isLocked || !contractMiner) {
-      throw new Error("Wallet not loaded or mining not initialized");
-    }
-
-    try {
-      await contractMiner.claimPoolRewards();
-      await handleRefreshMiningStats();
-      updateActivity();
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to claim rewards";
-      throw new Error(errorMessage);
-    }
-  };
-
-  const handleRefreshMiningStats = async (): Promise<void> => {
-    if (!wallet || isLocked || !contractMiner) return;
-
-    try {
-      const [miningStats, minerStats, poolStats, poolMinerInfo] = await Promise.all([
-        contractMiner.getMiningStats(),
-        contractMiner.getMinerStats(wallet.address),
-        contractMiner.getPoolStats(),
-        contractMiner.getPoolMinerInfo(wallet.address)
-      ]);
-
-      setMiningStats(miningStats);
-      setMinerStats(minerStats);
-      setPoolStats(poolStats);
-      setPoolMinerInfo(poolMinerInfo);
-    } catch (err) {
-      console.error("Failed to refresh mining stats:", err);
-    }
-  };
+  }, [address]);
 
   const value: WalletContextType = {
-    wallet,
-    loading,
-    error,
-    balance,
-    transactions,
-    balanceLoading,
-    transactionsLoading,
+    // Wallet state
     isLocked,
-    unlock,
-    lock,
-    clearError,
-    refreshBalance,
-    refreshTransactions,
-    sendTransaction: handleSendTransaction,
-    // Mining functionality
+    wallet,
+    address,
+    balance,
+    
+    // Mining state
+    isMining,
     miningStats,
-    minerStats,
-    poolStats,
-    poolMinerInfo,
-    startMining: handleStartMining,
-    stopMining: handleStopMining,
-    isMining: handleIsMining,
-    joinPool: handleJoinPool,
-    leavePool: handleLeavePool,
-    claimPoolRewards: handleClaimPoolRewards,
-    refreshMiningStats: handleRefreshMiningStats,
+    blockchainStats,
+    
+    // Transactions
+    transactions,
+    
+    // Session
+    sessionTimeout,
+    lastActivity,
+    
+    // Functions
+    createNewWallet,
+    importExistingWallet,
+    unlockWallet,
+    lockWallet,
+    startMining,
+    stopMining,
+    refreshMiningStats,
+    refreshBalance,
+    updateSessionTimeout,
   };
 
   return (
@@ -393,12 +349,4 @@ export function WalletProvider({ children }: WalletProviderProps) {
       {children}
     </WalletContext.Provider>
   );
-}
-
-export function useWallet() {
-  const context = useContext(WalletContext);
-  if (context === undefined) {
-    throw new Error("useWallet must be used within a WalletProvider");
-  }
-  return context;
-} 
+}; 

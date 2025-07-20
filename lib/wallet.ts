@@ -12,6 +12,93 @@ export function generateMnemonic(): string {
 }
 
 /**
+ * Create a new wallet and store it encrypted
+ * @param password The password to encrypt with
+ * @returns The ethers HDNodeWallet instance
+ */
+export async function createWallet(password: string = "numicoin"): Promise<HDNodeWallet> {
+  try {
+    const mnemonic = generateMnemonic();
+    const wallet = ethers.Wallet.fromPhrase(mnemonic);
+    
+    // Encrypt and store the wallet
+    encryptAndStore(mnemonic, password);
+    
+    return wallet;
+  } catch (error) {
+    console.error("Error creating wallet:", error);
+    throw new Error("Failed to create wallet");
+  }
+}
+
+/**
+ * Import wallet from recovery phrase
+ * @param recoveryPhrase The 12-word recovery phrase
+ * @param password The password to encrypt with
+ * @returns The ethers HDNodeWallet instance
+ */
+export async function importWallet(recoveryPhrase: string, password: string = "numicoin"): Promise<HDNodeWallet> {
+  try {
+    const wallet = loadWalletFromPhrase(recoveryPhrase);
+    
+    // Encrypt and store the wallet
+    encryptAndStore(recoveryPhrase, password);
+    
+    return wallet;
+  } catch (error) {
+    console.error("Error importing wallet:", error);
+    throw new Error("Failed to import wallet");
+  }
+}
+
+/**
+ * Get the current wallet from storage
+ * @returns The ethers HDNodeWallet instance or null
+ */
+export function getWallet(): HDNodeWallet | null {
+  try {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    const encryptedMnemonic = localStorage.getItem(WALLET_STORAGE_KEY);
+    if (!encryptedMnemonic) {
+      return null;
+    }
+
+    // Try to decrypt with default password
+    try {
+      const decrypted = CryptoJS.AES.decrypt(encryptedMnemonic, "numicoin");
+      const mnemonic = decrypted.toString(CryptoJS.enc.Utf8);
+      
+      if (mnemonic) {
+        return ethers.Wallet.fromPhrase(mnemonic);
+      }
+    } catch (error) {
+      // Wallet exists but password is different
+      return null;
+    }
+
+    return null;
+  } catch (error) {
+    console.error("Error getting wallet:", error);
+    return null;
+  }
+}
+
+/**
+ * Lock the wallet (remove from memory)
+ */
+export function lockWallet(): void {
+  // In a real implementation, you'd clear the wallet from memory
+  // For now, we just clear any session data
+  if (typeof window !== "undefined") {
+    // Clear any session-related data
+    sessionStorage.clear();
+  }
+}
+
+/**
  * Encrypt and store the mnemonic phrase in localStorage
  * @param mnemonic The mnemonic phrase to encrypt
  * @param password The password to encrypt with
@@ -100,58 +187,48 @@ export function hasWallet(): boolean {
  * @returns The ethers JsonRpcProvider instance
  */
 export function getProvider(): ethers.JsonRpcProvider {
-  const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
-  if (!rpcUrl) {
-    throw new Error("NEXT_PUBLIC_RPC_URL environment variable is not set");
-  }
+  const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL || "https://mainnet.infura.io/v3/YOUR_PROJECT_ID";
   return new ethers.JsonRpcProvider(rpcUrl);
 }
 
 /**
- * Clear the stored wallet from localStorage
+ * Clear the wallet from localStorage
  */
 export function clearWallet(): void {
   if (typeof window !== "undefined") {
     localStorage.removeItem(WALLET_STORAGE_KEY);
+    sessionStorage.clear();
   }
 }
 
-// ===== NEW FUNCTIONS FOR BALANCE & TRANSACTIONS =====
-
 /**
- * Get wallet balance in ETH
- * @param address The wallet address
- * @returns Balance in ETH as a string
+ * Get the balance of an address
+ * @param address The address to get the balance for
+ * @returns The balance as a string
  */
 export async function getBalance(address: string): Promise<string> {
   try {
     const provider = getProvider();
     const balance = await provider.getBalance(address);
-    const baseBalance = ethers.formatEther(balance);
-    
-    // Add mining rewards to the balance
-    const miningRewards = getMiningRewards(address);
-    const totalBalance = parseFloat(baseBalance) + parseFloat(miningRewards);
-    
-    return totalBalance.toString();
+    return ethers.formatEther(balance);
   } catch (error) {
-    console.error("Error fetching balance:", error);
-    throw new Error("Failed to fetch balance");
+    console.error("Error getting balance:", error);
+    return "0";
   }
 }
 
 /**
- * Get transaction count (nonce) for an address
- * @param address The wallet address
- * @returns The current nonce
+ * Get the transaction count (nonce) for an address
+ * @param address The address to get the nonce for
+ * @returns The nonce as a number
  */
 export async function getTransactionCount(address: string): Promise<number> {
   try {
     const provider = getProvider();
     return await provider.getTransactionCount(address);
   } catch (error) {
-    console.error("Error fetching transaction count:", error);
-    throw new Error("Failed to fetch transaction count");
+    console.error("Error getting transaction count:", error);
+    return 0;
   }
 }
 
@@ -159,8 +236,8 @@ export async function getTransactionCount(address: string): Promise<number> {
  * Estimate gas for a transaction
  * @param fromAddress The sender address
  * @param toAddress The recipient address
- * @param amount The amount to send in ETH
- * @returns Estimated gas limit
+ * @param amount The amount to send
+ * @returns The estimated gas as a bigint
  */
 export async function estimateGas(
   fromAddress: string,
@@ -169,42 +246,39 @@ export async function estimateGas(
 ): Promise<bigint> {
   try {
     const provider = getProvider();
-    const amountWei = ethers.parseEther(amount);
-    
-    const transaction = {
+    const gasEstimate = await provider.estimateGas({
       from: fromAddress,
       to: toAddress,
-      value: amountWei,
-    };
-    
-    return await provider.estimateGas(transaction);
+      value: ethers.parseEther(amount),
+    });
+    return gasEstimate;
   } catch (error) {
     console.error("Error estimating gas:", error);
-    throw new Error("Failed to estimate gas");
+    return BigInt(21000); // Default gas limit
   }
 }
 
 /**
- * Get current gas price
- * @returns Current gas price in wei
+ * Get the current gas price
+ * @returns The gas price as a bigint
  */
 export async function getGasPrice(): Promise<bigint> {
   try {
     const provider = getProvider();
-    return await provider.getFeeData().then(feeData => feeData.gasPrice || 0n);
+    return await provider.getFeeData().then(feeData => feeData.gasPrice || BigInt(0));
   } catch (error) {
-    console.error("Error fetching gas price:", error);
-    throw new Error("Failed to fetch gas price");
+    console.error("Error getting gas price:", error);
+    return BigInt(20000000000); // 20 gwei default
   }
 }
 
 /**
  * Send a transaction
- * @param wallet The wallet instance
+ * @param wallet The wallet to send from
  * @param toAddress The recipient address
- * @param amount The amount to send in ETH
- * @param gasLimit Optional gas limit (will estimate if not provided)
- * @returns Transaction hash
+ * @param amount The amount to send
+ * @param gasLimit Optional gas limit
+ * @returns The transaction hash
  */
 export async function sendTransaction(
   wallet: HDNodeWallet,
@@ -216,18 +290,12 @@ export async function sendTransaction(
     const provider = getProvider();
     const connectedWallet = wallet.connect(provider);
     
-    const amountWei = ethers.parseEther(amount);
-    const estimatedGas = gasLimit || await estimateGas(wallet.address, toAddress, amount);
-    const gasPrice = await getGasPrice();
-    
-    const transaction = {
+    const tx = await connectedWallet.sendTransaction({
       to: toAddress,
-      value: amountWei,
-      gasLimit: estimatedGas,
-      gasPrice: gasPrice,
-    };
+      value: ethers.parseEther(amount),
+      gasLimit: gasLimit || BigInt(21000),
+    });
     
-    const tx = await connectedWallet.sendTransaction(transaction);
     return tx.hash;
   } catch (error) {
     console.error("Error sending transaction:", error);
@@ -236,39 +304,34 @@ export async function sendTransaction(
 }
 
 /**
- * Add mining reward to wallet balance (simulated)
- * @param walletAddress The wallet address to reward
- * @param amount The amount to add in ETH
+ * Add mining reward to local storage (for browser mining)
+ * @param walletAddress The wallet address
+ * @param amount The amount to add
  */
 export function addMiningReward(walletAddress: string, amount: string): void {
+  if (typeof window === "undefined") return;
+  
   try {
-    if (typeof window === "undefined") return;
-    
-    // Store mining rewards in localStorage
-    const rewardsKey = `numi_mining_rewards_${walletAddress}`;
-    const existingRewards = localStorage.getItem(rewardsKey);
-    const currentRewards = existingRewards ? parseFloat(existingRewards) : 0;
-    const newRewards = currentRewards + parseFloat(amount);
-    
-    localStorage.setItem(rewardsKey, newRewards.toString());
-    console.log(`Added mining reward: ${amount} ETH to ${walletAddress}`);
+    const key = `mining_rewards_${walletAddress}`;
+    const currentRewards = localStorage.getItem(key) || "0";
+    const newRewards = (parseFloat(currentRewards) + parseFloat(amount)).toString();
+    localStorage.setItem(key, newRewards);
   } catch (error) {
     console.error("Error adding mining reward:", error);
   }
 }
 
 /**
- * Get mining rewards for a wallet address
+ * Get mining rewards from local storage
  * @param walletAddress The wallet address
- * @returns Total mining rewards in ETH as string
+ * @returns The mining rewards as a string
  */
 export function getMiningRewards(walletAddress: string): string {
+  if (typeof window === "undefined") return "0";
+  
   try {
-    if (typeof window === "undefined") return "0";
-    
-    const rewardsKey = `numi_mining_rewards_${walletAddress}`;
-    const rewards = localStorage.getItem(rewardsKey);
-    return rewards ? rewards : "0";
+    const key = `mining_rewards_${walletAddress}`;
+    return localStorage.getItem(key) || "0";
   } catch (error) {
     console.error("Error getting mining rewards:", error);
     return "0";
@@ -277,9 +340,9 @@ export function getMiningRewards(walletAddress: string): string {
 
 /**
  * Get transaction history for an address
- * @param address The wallet address
- * @param limit Number of transactions to fetch (default: 10)
- * @returns Array of transaction objects
+ * @param address The address to get transactions for
+ * @param limit The maximum number of transactions to return
+ * @returns Array of transactions
  */
 export async function getTransactionHistory(
   address: string,
@@ -289,42 +352,44 @@ export async function getTransactionHistory(
     const provider = getProvider();
     const blockNumber = await provider.getBlockNumber();
     
-    const transactions = [];
-    const blocksToCheck = Math.min(limit * 2, 1000); // Check more blocks to find transactions
+    const transactions: any[] = [];
     
-    for (let i = 0; i < blocksToCheck && transactions.length < limit; i++) {
-      const block = await provider.getBlock(blockNumber - i, true);
-      if (!block) continue;
+    // Get recent blocks and look for transactions
+    for (let i = 0; i < Math.min(limit * 10, 100); i++) {
+      const blockNumberToCheck = blockNumber - i;
+      if (blockNumberToCheck < 0) break;
       
-      for (const tx of block.transactions) {
-        // Only process if tx is an object (not a string/hash)
-        if (typeof tx === 'object' && tx !== null && 'from' in tx && 'to' in tx) {
-          const txObj = tx as TransactionResponse;
-          if (
-            (txObj.from?.toLowerCase() === address.toLowerCase()) ||
-            (txObj.to?.toLowerCase() === address.toLowerCase())
-          ) {
-            transactions.push({
-              hash: txObj.hash,
-              from: txObj.from,
-              to: txObj.to,
-              value: ethers.formatEther(txObj.value || 0),
-              gasPrice: txObj.gasPrice?.toString(),
-              gasLimit: txObj.gasLimit?.toString(),
-              blockNumber: txObj.blockNumber,
-              timestamp: block.timestamp,
-              type: txObj.from?.toLowerCase() === address.toLowerCase() ? 'sent' : 'received'
-            });
-            if (transactions.length >= limit) break;
+      try {
+        const block = await provider.getBlock(blockNumberToCheck, true);
+        if (block && block.transactions) {
+          for (const tx of block.transactions) {
+            if (tx.from === address || tx.to === address) {
+              transactions.push({
+                hash: tx.hash,
+                from: tx.from,
+                to: tx.to,
+                value: ethers.formatEther(tx.value),
+                blockNumber: blockNumberToCheck,
+                timestamp: block.timestamp,
+                type: tx.from === address ? 'sent' : 'received'
+              });
+              
+              if (transactions.length >= limit) {
+                return transactions;
+              }
+            }
           }
         }
+      } catch (error) {
+        // Skip blocks that can't be fetched
+        continue;
       }
     }
     
-    return transactions.sort((a, b) => b.timestamp - a.timestamp);
+    return transactions;
   } catch (error) {
-    console.error("Error fetching transaction history:", error);
-    throw new Error("Failed to fetch transaction history");
+    console.error("Error getting transaction history:", error);
+    return [];
   }
 }
 
@@ -347,39 +412,41 @@ export async function getTransactionDetails(txHash: string): Promise<any> {
       hash: tx.hash,
       from: tx.from,
       to: tx.to,
-      value: ethers.formatEther(tx.value || 0),
+      value: ethers.formatEther(tx.value),
       gasPrice: tx.gasPrice?.toString(),
       gasLimit: tx.gasLimit?.toString(),
-      gasUsed: receipt?.gasUsed?.toString(),
       blockNumber: tx.blockNumber,
-      status: receipt?.status,
-      ...(receipt && 'effectiveGasPrice' in receipt ? { effectiveGasPrice: (receipt as any).effectiveGasPrice?.toString() } : {}),
+      confirmations: tx.confirmations,
+      status: receipt?.status === 1 ? 'success' : 'failed'
     };
   } catch (error) {
-    console.error("Error fetching transaction details:", error);
-    throw new Error("Failed to fetch transaction details");
+    console.error("Error getting transaction details:", error);
+    throw new Error("Failed to get transaction details");
   }
 }
 
 /**
- * Validate Ethereum address
+ * Validate if an address is a valid Ethereum address
  * @param address The address to validate
  * @returns True if valid, false otherwise
  */
 export function isValidAddress(address: string): boolean {
   try {
     return ethers.isAddress(address);
-  } catch {
+  } catch (error) {
     return false;
   }
 }
 
 /**
- * Format address for display (shortened version)
- * @param address The full address
- * @returns Shortened address (e.g., 0x1234...5678)
+ * Format an address for display (shortened)
+ * @param address The address to format
+ * @returns The formatted address
  */
 export function formatAddress(address: string): string {
-  if (!address) return "";
+  if (!isValidAddress(address)) {
+    return "Invalid Address";
+  }
+  
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 } 
