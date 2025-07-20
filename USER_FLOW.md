@@ -21,7 +21,7 @@
 
 1. **Visit the site** → Redirected to `/login`
 2. **Login page**:
-   - Enter password to unlock wallet
+   - Enter 12-word recovery phrase to unlock wallet
    - Option to create new wallet (clears existing one)
 3. **Successful login** → Redirected to `/dashboard`
 4. **Dashboard** → Wallet unlocked and ready to use
@@ -39,9 +39,9 @@
 
 ## Security Features
 
-- **Password Protection**: Wallet is encrypted with user's password
+- **Recovery Phrase Authentication**: Users must enter their 12-word recovery phrase to access their wallet
 - **Session Management**: Auto-lock after inactivity
-- **Recovery Phrase**: 12-word mnemonic for wallet recovery
+- **Recovery Phrase**: 12-word mnemonic for wallet recovery and authentication
 - **Local Storage**: Encrypted wallet data stored locally
 
 ## Navigation Flow

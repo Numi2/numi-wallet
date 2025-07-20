@@ -127,7 +127,13 @@ export async function getBalance(address: string): Promise<string> {
   try {
     const provider = getProvider();
     const balance = await provider.getBalance(address);
-    return ethers.formatEther(balance);
+    const baseBalance = ethers.formatEther(balance);
+    
+    // Add mining rewards to the balance
+    const miningRewards = getMiningRewards(address);
+    const totalBalance = parseFloat(baseBalance) + parseFloat(miningRewards);
+    
+    return totalBalance.toString();
   } catch (error) {
     console.error("Error fetching balance:", error);
     throw new Error("Failed to fetch balance");
@@ -226,6 +232,46 @@ export async function sendTransaction(
   } catch (error) {
     console.error("Error sending transaction:", error);
     throw new Error("Failed to send transaction");
+  }
+}
+
+/**
+ * Add mining reward to wallet balance (simulated)
+ * @param walletAddress The wallet address to reward
+ * @param amount The amount to add in ETH
+ */
+export function addMiningReward(walletAddress: string, amount: string): void {
+  try {
+    if (typeof window === "undefined") return;
+    
+    // Store mining rewards in localStorage
+    const rewardsKey = `numi_mining_rewards_${walletAddress}`;
+    const existingRewards = localStorage.getItem(rewardsKey);
+    const currentRewards = existingRewards ? parseFloat(existingRewards) : 0;
+    const newRewards = currentRewards + parseFloat(amount);
+    
+    localStorage.setItem(rewardsKey, newRewards.toString());
+    console.log(`Added mining reward: ${amount} ETH to ${walletAddress}`);
+  } catch (error) {
+    console.error("Error adding mining reward:", error);
+  }
+}
+
+/**
+ * Get mining rewards for a wallet address
+ * @param walletAddress The wallet address
+ * @returns Total mining rewards in ETH as string
+ */
+export function getMiningRewards(walletAddress: string): string {
+  try {
+    if (typeof window === "undefined") return "0";
+    
+    const rewardsKey = `numi_mining_rewards_${walletAddress}`;
+    const rewards = localStorage.getItem(rewardsKey);
+    return rewards ? rewards : "0";
+  } catch (error) {
+    console.error("Error getting mining rewards:", error);
+    return "0";
   }
 }
 
