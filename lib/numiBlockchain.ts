@@ -305,21 +305,30 @@ export class NumiMiner {
     // Create Web Workers for parallel mining
     for (let i = 0; i < this.workerCount; i++) {
       const worker = new Worker(URL.createObjectURL(new Blob([`
-        // Note: Web Workers can't import ES modules, so we'll use a simple hash function
-        // In production, you'd want to use a proper Blake3 implementation
+        // Note: Web Workers can't import ES modules, so we'll try to load a standalone UMD build of @noble/hashes/blake3
+        importScripts('https://cdn.jsdelivr.net/npm/@noble/hashes@1.3.0/blake3.min.js');
+        
         let isMining = false;
         let stats = { totalHashes: 0, hashRate: 0 };
         let startTime = Date.now();
-        
-        function simpleHash(data) {
-          // Simple hash function for demo purposes
-          let hash = 0;
-          for (let i = 0; i < data.length; i++) {
-            const char = data.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash; // Convert to 32-bit integer
+
+        // Helper: convert Uint8Array -> hex string
+        function bytesToHex(bytes) {
+          let hex = '';
+          for (let i = 0; i < bytes.length; i++) {
+            const byteHex = bytes[i].toString(16).padStart(2, '0');
+            hex += byteHex;
           }
-          return Math.abs(hash).toString(16).padStart(8, '0');
+          return hex;
+        }
+
+        function blake3HashHex(str) {
+          // Convert string to Uint8Array (UTF-8)
+          const encoder = new TextEncoder();
+          const data = encoder.encode(str);
+          // globalThis.blake3 is exposed by the imported script
+          const digest = globalThis.blake3(data);
+          return bytesToHex(digest);
         }
         
         function getTarget(difficulty) {
@@ -341,7 +350,7 @@ export class NumiMiner {
             previousHash,
             difficulty
           });
-          return simpleHash(blockData);
+          return blake3HashHex(blockData);
         }
         
         self.onmessage = function(e) {
