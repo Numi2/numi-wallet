@@ -331,15 +331,17 @@ export class NumiMiner {
           return bytesToHex(digest);
         }
         
-        function getTarget(difficulty) {
-          const targetBits = 256 - difficulty;
-          const targetHex = 'f'.repeat(Math.floor(targetBits / 4));
-          return targetHex.padEnd(64, '0');
+        function getTargetBigInt(difficulty) {
+          // Each difficulty point adds 4 bits (hex digit) of leading zeros in target space
+          const shift = BigInt(difficulty * 4);
+          // (1 << (256 - shift)) - 1
+          return (1n << (256n - shift)) - 1n;
         }
         
-        function meetsDifficulty(hash, difficulty) {
-          const target = getTarget(difficulty);
-          return hash < target;
+        function meetsDifficulty(hashHex, difficulty) {
+          const hashVal = BigInt('0x' + hashHex);
+          const target = getTargetBigInt(difficulty);
+          return hashVal <= target;
         }
         
         function calculateHash(index, timestamp, data, previousHash, difficulty) {
