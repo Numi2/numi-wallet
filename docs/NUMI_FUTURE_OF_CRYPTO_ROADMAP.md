@@ -13,7 +13,13 @@ See also:
 
 This document turns Numi's doctrine into a concrete strategy for the next generation of privacy-preserving crypto systems.
 
-For step-by-step implementation sequencing and deeper technical guidance, use [Numi Tachyon Execution Guide](NUMI_TACHYON_EXECUTION_GUIDE.md) alongside this roadmap.
+For step-by-step implementation sequencing and deeper technical guidance, use [Numi Tachyon Execution Guide](NUMI_TACHYON_EXECUTION_GUIDE.md) alongside this roadmap. For the current shipping milestone, that execution guide is the authoritative iOS-only implementation path.
+
+Current shipping restriction for this program:
+
+- Numi's Tachyon milestone is iOS only
+- macOS, watchOS, and visionOS are out of scope for the current Tachyon-ready definition
+- all proof correctness, authority, and readiness claims must stand on the iPhone alone
 
 The immediate forcing function is Project Tachyon for Zcash. Tachyon is the clearest public example of where serious privacy wallets are going next:
 
@@ -49,6 +55,12 @@ Developer-note assumptions that Numi should actively plan for:
 
 These assumptions should be treated as planning targets, not protocol law. Numi should build the right abstraction boundaries now and keep the concrete adapter behavior flexible until Tachyon ZIPs, testnets, and wallet specs stabilize.
 
+Apple platform baseline for this plan:
+
+- the installed Xcode 26.4 / iPhoneOS 26.4 SDK exposes `SecureEnclave.MLDSA87`, `MLDSA87`, `XWingMLKEM768X25519`, and the HPKE XWing ciphersuite, so the PQ cryptography line is real on the local toolchain
+- the same SDK exposes `BGContinuedProcessingTaskRequest`, which creates a credible iPhone-only path for long proof jobs; background GPU remains optional, entitlement-gated, and device-dependent
+- `LocalAuthenticationView` is still absent from the local iPhoneOS 26.4 SDK, so the product should stay on `LAContext`, Keychain access control, and system sheets
+
 ## Strategic Position
 
 Numi's future-of-crypto position should be explicit:
@@ -58,6 +70,7 @@ Numi's future-of-crypto position should be explicit:
 3. The app shell should stay stable while protocol machinery is introduced through signed manifests, capability flags, service topology, and adapter boundaries.
 4. New privacy features only matter if they improve the user experience in addition to improving the protocol. "Open and pay immediately" is the standard, not "sync and wait."
 5. Numi must be testnet-ready before Tachyon is socially final so the wallet team can shape the UX while protocol assumptions are still negotiable.
+6. The current Tachyon-ready milestone must not depend on a Mac proof lane or any other non-iOS companion surface.
 
 ## North Star
 
@@ -70,7 +83,7 @@ That means:
 - preserve fee privacy without forcing the user to manually game fee markets
 - resolve large post-quantum identities without exposing counterparties to infrastructure
 - support migration, governance, and recovery without breaking sovereignty
-- keep the authority root on the iPhone even as proving and transport systems evolve
+- keep the authority root and the authoritative proof-verification path on the iPhone even as proving and transport systems evolve
 
 ## Product Rules For Next-Generation Coins
 
@@ -140,7 +153,7 @@ Required outcomes:
 
 - explicit transaction model boundary for bundle, action, stamp, anchor, and proof state
 - proof compression and decompression lifecycle support
-- local and paired-Mac proving lanes
+- local iPhone proof lanes, including continued-processing support where available
 - proof verification on the authority device before final spend authorization
 
 ### 6. Post-Quantum Identity And Address Resolution
@@ -162,7 +175,7 @@ Required outcomes:
 
 - checkpointed governance state by block height
 - proof of eligible unspent balance without moving funds
-- local or Mac-accelerated proof generation
+- local iPhone proof generation
 - vote receipts and verification surfaces
 
 ### 8. Pool Migration And Recovery
@@ -188,16 +201,21 @@ Strong foundations already present:
 - shared-secret tag-ratchet bootstrap and persistence
 - dynamic-fee scaffolding with quote, commitment, hotkey, and settlement bundle modeling
 - signed coin manifest validation
-- role-specific device model with Mac proof-offload intent
+- local proving seam through `LocalProver`
 - background PIR refresh hooks for coins that support immediate-pay readiness
 
 Key gaps:
 
+- no explicit iOS-only Tachyon scope lock in build settings or project configuration
 - no Tachyon-specific coin adapter or manifest profile
 - no multi-provider PIR comparison or signed PIR receipts
 - no dispute-evidence or slash-evidence export path
+- no checked-in entitlements file for App Attest or continued-processing GPU experiments
+- no full App Attest bootstrap and attestation-registration lifecycle
 - no production note decryption and witness-building path against Tachyon/Zcash specs
 - no real proof backend for recursive shielded spends
+- the iPhone continued-processing proof lane exists, but it is still CPU-first and lacks an explicit execution-context split for background CPU versus background GPU grants
+- no chunked GPU proof runner that can publish progress and stop cleanly on expiration
 - no stamp/action transaction model in the wallet core
 - no post-quantum address-resolution client
 - no governance proof lane
@@ -240,6 +258,7 @@ Tasks:
 - Cache responses by block height and anchor root, not only by latest observation time.
 - Add mismatch detection, provider scoring, and evidence export.
 - Add UI posture states: ready, stale, degraded, disputed.
+- Add a `PIR Readiness Lease` and `Refresh Ticket Ledger` so iOS background refresh can maintain readiness without loading long-lived descriptor secrets.
 
 Repo touchpoints:
 
@@ -301,8 +320,8 @@ Tasks:
 - Introduce explicit wallet-side models for bundle, action, stamp, anchor, and proof stages.
 - Keep the transaction builder independent from the eventual proving backend so Ragu changes do not infect the app shell.
 - Add compression/decompression lifecycle handling for intermediate and transmitted proof objects.
-- Define the iPhone and Mac proving contract around bounded jobs, transcript digests, and local verification on return.
-- Add benchmark harnesses for iPhone-only and Mac-assisted proof flows.
+- Define the iPhone proving contract around bounded jobs, transcript digests, local verification on return, and resumable send capsules.
+- Add benchmark harnesses for iPhone foreground and continued-processing proof flows.
 
 Repo touchpoints:
 
@@ -342,7 +361,7 @@ Tasks:
 
 - Add governance checkpoint state keyed by block height.
 - Model nullifier non-membership or equivalent proof inputs as wallet-managed data.
-- Add proof-generation pathways that can run locally or on a paired Mac.
+- Add proof-generation pathways that run locally on iPhone and reuse the same proof capsule contract as spend where appropriate.
 - Add voting intent, review, submission, and receipt flows.
 - Make governance posture visible without exposing balances or specific note history.
 
@@ -365,6 +384,8 @@ Tasks:
 - Add shadow-mode wallet verification against Tachyon test data before full spend support lands.
 - Add migration planning and partially completed migration recovery.
 - Define performance budgets for PIR refresh, receive discovery, and proof generation on current iPhone hardware.
+- Benchmark the real iPhone proof ladder: foreground, continued-processing CPU, and optional continued-processing GPU on entitled supported devices.
+- Ship the GPU continued-processing path only if entitlement provisioning, runtime availability, thermals, and App Review posture are all acceptable. Otherwise keep the continued-processing path CPU-first.
 - Produce protocol notes, threat model, test matrix, and backend contract specs for audit.
 
 Repo touchpoints:
@@ -383,20 +404,25 @@ Status: next
 Objectives:
 
 - make Numi capable of describing Tachyon honestly
+- lock the current program to an explicit iOS-only path
 - formalize the capability surface and service topology
 - turn PIR into a verifiable subsystem rather than a single remote client
 
 Tasks:
 
+- lock project and platform configuration to the current iOS-only milestone
 - ship capability model v2
 - add `tachyon-testnet` manifest and environment wiring
 - add PIR provider sets and comparison policy
+- add background-safe refresh tickets and readiness leases
 - model signed PIR response envelopes and dispute evidence
 - define the Tachyon wallet adapter boundary
+- design the full App Attest bootstrap and replay-resistant request contract
 
 Exit criteria:
 
 - Numi can load a Tachyon profile, describe inactive pieces honestly, and maintain shadow state without pretending full support exists
+- the iOS-only platform configuration story is explicit enough that an AI developer does not have to guess which Apple platforms are in scope
 
 ### Phase 2: Shadow Wallet And Receive Readiness
 
@@ -413,6 +439,7 @@ Tasks:
 - add block-height-aware freshness ledger
 - add shadow note ingestion against test vectors and mocks
 - build dashboard posture for ready, stale, degraded, disputed
+- prove that iOS background refresh can maintain honest readiness using refresh tickets rather than long-lived descriptor secrets
 
 Exit criteria:
 
@@ -430,13 +457,13 @@ Tasks:
 
 - add Tachyon transaction models
 - build note selection and witness construction against real specs
-- integrate local proof generation and Mac offload
+- integrate local iPhone proof generation and continued-processing proof handling where available
 - replace fee placeholder logic with protocol-authentic hidden-fee handling
 - add relay submission and settlement reconciliation
 
 Exit criteria:
 
-- authority iPhone can send on Tachyon testnet alone, and a paired Mac can accelerate without becoming a trust dependency
+- authority iPhone can send on Tachyon testnet alone without depending on any non-iOS device
 
 ### Phase 4: PQ Identity, Governance, And Migration
 
@@ -480,12 +507,14 @@ Exit criteria:
 
 If Numi executes only the highest-leverage next work, it should be this:
 
-1. Add capability model v2 and a `tachyon-testnet` manifest.
-2. Convert PIR into a provider-aware, verifiable subsystem.
-3. Define the Tachyon transaction adapter boundary before touching proving internals.
-4. Build production-grade relationship-state handling for discovery ratchets.
-5. Replace the fee-privacy placeholder path with a spec-shaped abstraction that can survive protocol churn.
-6. Stand up a Tachyon lab with mocks, vectors, and benchmark scripts.
+1. Lock the current Tachyon milestone to an explicit iOS-only scope and configuration story.
+2. Add capability model v2 and a `tachyon-testnet` manifest.
+3. Convert PIR into a provider-aware, verifiable subsystem with refresh tickets and readiness leases.
+4. Define the Tachyon transaction and proof adapter boundary before touching proving internals.
+5. Build production-grade relationship-state handling for discovery ratchets.
+6. Replace the fee-privacy placeholder path with a spec-shaped abstraction that can survive protocol churn.
+7. Stand up a Tachyon lab with mocks, vectors, and benchmark scripts.
+8. Design the missing App Attest bootstrap and replay-resistant request flow.
 
 ## Definition Of Done For Tachyon Readiness
 
@@ -496,7 +525,8 @@ Numi should only claim Tachyon readiness when all of the following are true:
 - PIR results can be compared, signed, or otherwise verified according to the service contract
 - hidden-fee settlement does not leak the user's effective maximum fee in normal flows
 - the authority iPhone verifies proof-bearing spend state locally before signing
-- a paired Mac can accelerate proofs but cannot become the authority
+- the current Tachyon-ready milestone does not depend on any non-iOS device
+- long-running proof work on iPhone either completes through foreground or continued-processing lanes, or degrades honestly without corrupting send state
 - post-quantum address resolution, if required by the protocol, is private and recoverable
 - governance flows do not force fund movement or reusable public identity
 - migration between legacy and Tachyon pools is explicit, reversible where possible, and operationally documented

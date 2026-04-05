@@ -46,6 +46,10 @@ actor RootWalletVault {
     private let dynamicFeeEngine: DynamicFeeEngine
     private let relayClient: RelayClient
     private let prover: LocalProver
+    private let tachyonStateAdapter: any TachyonStateAdapter
+    private let tachyonTransactionAdapter: any TachyonTransactionAdapter
+    private let tachyonProofAdapter: any TachyonProofAdapter
+    private let tachyonProofContinuationCoordinator: TachyonProofContinuationCoordinator
 
     private var cachedProfile: WalletProfile?
     private var unlockedVault: VaultWalletSnapshot?
@@ -66,7 +70,11 @@ actor RootWalletVault {
         shieldedStateCoordinator: ShieldedStateCoordinator,
         dynamicFeeEngine: DynamicFeeEngine,
         relayClient: RelayClient,
-        prover: LocalProver
+        prover: LocalProver,
+        tachyonStateAdapter: any TachyonStateAdapter = DefaultTachyonStateAdapter(),
+        tachyonTransactionAdapter: any TachyonTransactionAdapter = DefaultTachyonTransactionAdapter(),
+        tachyonProofAdapter: any TachyonProofAdapter = RaguTachyonProofAdapter(),
+        tachyonProofContinuationCoordinator: TachyonProofContinuationCoordinator = .shared
     ) {
         self.role = role
         self.deviceID = deviceID
@@ -83,6 +91,10 @@ actor RootWalletVault {
         self.dynamicFeeEngine = dynamicFeeEngine
         self.relayClient = relayClient
         self.prover = prover
+        self.tachyonStateAdapter = tachyonStateAdapter
+        self.tachyonTransactionAdapter = tachyonTransactionAdapter
+        self.tachyonProofAdapter = tachyonProofAdapter
+        self.tachyonProofContinuationCoordinator = tachyonProofContinuationCoordinator
     }
 
     func bootstrap() async throws -> WalletProfile {
@@ -92,6 +104,15 @@ actor RootWalletVault {
         let profile = try await stateStore.load(deviceID: deviceID, role: role)
         cachedProfile = profile
         return profile
+    }
+
+    func prepareTachyonProofContinuation() async {
+        await tachyonProofContinuationCoordinator.installHandler { [self] taskIdentifier, progressSink in
+            try await runPendingContinuedProcessingProof(
+                taskIdentifier: taskIdentifier,
+                progressSink: progressSink
+            )
+        }
     }
 
     func initializeWallet(dayAlias: String?) async throws -> WalletProfile {
@@ -368,19 +389,33 @@ actor RootWalletVault {
             profile.shielded.pirSync.lastBandwidth = .zero
             profile.shielded.pirSync.readyForImmediateSpend = false
             profile.shielded.pirSync.lastError = nil
+            profile.shielded.pirSync.readinessClassification = .stale
+            profile.shielded.pirSync.readinessLease = nil
+            profile.shielded.pirSync.disputeEvidence = nil
+            profile.shielded.pirSync.recentReceipts = []
             try await persist(profile)
             return ShieldedRefreshReport(
                 noteCount: profile.shielded.notes.count,
+                discoveredNoteCount: profile.shielded.notes.filter { $0.readinessState == .discovered }.count,
+                verifiedNoteCount: profile.shielded.notes.filter { $0.readinessState == .verified }.count,
+                witnessFreshNoteCount: profile.shielded.notes.filter { $0.readinessState == .witnessFresh }.count,
                 spendableNoteCount: 0,
                 lastKnownBlockHeight: profile.shielded.pirSync.lastKnownBlockHeight,
                 bandwidth: .zero,
-                readyForImmediateSpend: false
+                readyForImmediateSpend: false,
+                readinessClassification: .stale,
+                leaseExpiresAt: nil,
+                mismatchCount: profile.shielded.pirSync.mismatchEvents.count,
+                deferredMatchCount: 0
             )
         }
         let report = try await shieldedStateCoordinator.refresh(
             profile: &profile,
             activeDescriptors: activeDescriptors(from: profile),
-            trigger: trigger
+            trigger: trigger,
+            checkpoint: { snapshot in
+                try await self.persist(snapshot)
+            }
         )
         try recalculateBalances(in: &profile)
         try await persist(profile)
@@ -413,12 +448,6 @@ actor RootWalletVault {
         guard configuration.supportsShieldedSpendPipeline else {
             throw WalletError.featureUnavailable("PIR/tag/relay shielded spending")
         }
-        let authorization = try await authorizeSpend(
-            draft,
-            peerPresent: peerPresent,
-            privacyExposureDetected: privacyExposureDetected,
-            authorizationContext: biometricContext
-        )
         _ = try await refreshShieldedState(trigger: .preSpend)
 
         var profile = try await requireInitializedProfile()
@@ -464,7 +493,72 @@ actor RootWalletVault {
             merklePath: merklePath
         )
         let feeAuthorization = try await dynamicFeeEngine.prepareAuthorization(draft: draft, source: source)
-        let submission = ShieldedSpendSubmission(
+        let witnessRequirements = tachyonStateAdapter.witnessRefreshRequirements(for: [note])
+        let sendCapsule = try tachyonTransactionAdapter.makeSendCapsule(
+            draft: draft,
+            source: source,
+            descriptor: descriptor,
+            relationshipID: tagPlan.relationshipID,
+            outgoingTag: tagPlan.tag,
+            isIntroductionPayment: tagPlan.isIntroductionPayment,
+            recipientCiphertext: recipientCiphertext,
+            feeAuthorization: feeAuthorization,
+            network: profile.shielded.network
+        )
+        let checkpointID = UUID()
+        var proofJob = try tachyonProofAdapter.makeSendProofJob(
+            capsule: sendCapsule,
+            profile: profile,
+            witnessRequirements: witnessRequirements,
+            lane: .continuedProcessing
+        )
+        let continuedProcessingTaskIdentifier = TachyonProofContinuationCoordinator.taskIdentifier(for: checkpointID)
+        let proofCheckpoint = enqueueProofCheckpoint(
+            profile: &profile,
+            checkpointID: checkpointID,
+            capsule: sendCapsule,
+            job: proofJob,
+            taskIdentifier: continuedProcessingTaskIdentifier
+        )
+        try await persist(profile)
+
+        let verifiedProofArtifact: TachyonProofArtifact
+        let didScheduleContinuedProcessing = await tachyonProofContinuationCoordinator.submit(
+            taskIdentifier: continuedProcessingTaskIdentifier,
+            title: "Completing private send proof",
+            subtitle: "Sealed Tachyon capsule in progress",
+            requestGPU: false
+        )
+
+        if didScheduleContinuedProcessing {
+            verifiedProofArtifact = try await tachyonProofContinuationCoordinator.awaitResult(for: continuedProcessingTaskIdentifier)
+        } else {
+            proofJob = try tachyonProofAdapter.makeSendProofJob(
+                capsule: sendCapsule,
+                profile: profile,
+                witnessRequirements: witnessRequirements,
+                lane: .foreground
+            )
+            updateProofCheckpoint(
+                profile: &profile,
+                checkpointID: proofCheckpoint.id,
+                state: .queued,
+                job: proofJob,
+                taskIdentifier: nil,
+                lastError: "Continued processing unavailable; using the foreground proof lane."
+            )
+            try await persist(profile)
+            verifiedProofArtifact = try await runQueuedProofCheckpoint(checkpointID: proofCheckpoint.id)
+        }
+
+        profile = try await requireInitializedProfile()
+        let authorization = try await authorizeSpend(
+            draft,
+            peerPresent: peerPresent,
+            privacyExposureDetected: privacyExposureDetected,
+            authorizationContext: biometricContext
+        )
+        var submission = ShieldedSpendSubmission(
             draft: draft,
             authorization: authorization,
             source: source,
@@ -473,12 +567,27 @@ actor RootWalletVault {
             isIntroductionPayment: tagPlan.isIntroductionPayment,
             recipientCiphertext: recipientCiphertext,
             feeAuthorization: feeAuthorization,
+            tachyonEnvelope: nil,
+            tachyonProofArtifact: verifiedProofArtifact,
             createdAt: Date()
+        )
+        submission.tachyonEnvelope = try tachyonTransactionAdapter.makeSubmissionEnvelope(
+            capsule: sendCapsule,
+            proofArtifact: verifiedProofArtifact,
+            relayPayload: submission
         )
         let receipt = try await relayClient.submit(submission)
 
+        profile.shielded.pendingProofs.removeAll { $0.id == proofCheckpoint.id }
         if let noteIndex = profile.shielded.notes.firstIndex(where: { $0.id == note.id }) {
             profile.shielded.notes[noteIndex].spendState = .pendingSubmission
+        }
+        if let relationshipID = tagPlan.relationshipID {
+            await shieldedStateCoordinator.finalizeSubmittedOutgoingTag(
+                profile: &profile,
+                relationshipID: relationshipID,
+                isIntroductionPayment: tagPlan.isIntroductionPayment
+            )
         }
         profile.shielded.latestFeeQuote = feeAuthorization.quote
         try recalculateBalances(in: &profile)
@@ -712,14 +821,280 @@ actor RootWalletVault {
 
     func runProof(policy: ProofPolicy) async throws -> LocalProofArtifact {
         let profile = try await requireInitializedProfile()
-        let dayWalletData = try JSONEncoder().encode(profile.dayWallet ?? .empty)
-        let witness = dayWalletData + (profile.rootPublicIdentity ?? Data())
         let pairedMacAvailable = profile.peers.contains { $0.kind == .mac }
-        return try await prover.prove(
-            job: LocalProofJob(id: UUID(), label: "Wallet State Check", witness: witness, rounds: 512),
+        let proofJob = try tachyonProofAdapter.makeWalletStateCheckJob(
+            profile: profile,
+            label: "Wallet State Check",
+            lane: .foreground
+        )
+        let proofArtifact = try await prover.prove(
+            job: proofJob,
             policy: policy,
             pairedMacAvailable: pairedMacAvailable
         )
+        let verifiedProofArtifact = try tachyonProofAdapter.verify(proofArtifact, for: proofJob)
+        return tachyonProofAdapter.localArtifact(from: verifiedProofArtifact)
+    }
+
+    func resumePendingShieldedSend(
+        peerPresent: Bool,
+        privacyExposureDetected: Bool
+    ) async throws -> RelaySubmissionReceipt {
+        let biometricContext = try await authClient.authenticateBiometric(reason: "Approve resumed Numi spend")
+        let checkpointID = try await nextActionableProofCheckpointID()
+        return try await resumePendingShieldedSend(
+            checkpointID: checkpointID,
+            peerPresent: peerPresent,
+            privacyExposureDetected: privacyExposureDetected,
+            authorizationContext: biometricContext
+        )
+    }
+
+    func resumePendingShieldedSend(
+        checkpointID: UUID,
+        peerPresent: Bool,
+        privacyExposureDetected: Bool
+    ) async throws -> RelaySubmissionReceipt {
+        let biometricContext = try await authClient.authenticateBiometric(reason: "Approve resumed Numi spend")
+        return try await resumePendingShieldedSend(
+            checkpointID: checkpointID,
+            peerPresent: peerPresent,
+            privacyExposureDetected: privacyExposureDetected,
+            authorizationContext: biometricContext
+        )
+    }
+
+    func resumePendingShieldedSend(
+        checkpointID: UUID,
+        peerPresent: Bool,
+        privacyExposureDetected: Bool,
+        authorizationContext biometricContext: LAContext
+    ) async throws -> RelaySubmissionReceipt {
+        guard configuration.supportsShieldedSpendPipeline else {
+            throw WalletError.featureUnavailable("PIR/tag/relay shielded spending")
+        }
+
+        var profile = try await requireInitializedProfile()
+        guard let checkpoint = profile.shielded.pendingProofs.first(where: { $0.id == checkpointID }) else {
+            throw WalletError.resumableProofPending("The selected shielded send is no longer queued.")
+        }
+        guard checkpoint.state != .running else {
+            throw WalletError.resumableProofPending("A Tachyon proof is still running. Wait for it to complete before resuming.")
+        }
+
+        let proofArtifact: TachyonProofArtifact
+
+        if checkpoint.state == .proofReady, let storedArtifact = checkpoint.artifact {
+            do {
+                proofArtifact = try tachyonProofAdapter.verify(storedArtifact, for: checkpoint.job)
+            } catch {
+                let resumedJob = try tachyonProofAdapter.makeSendProofJob(
+                    capsule: checkpoint.capsule,
+                    profile: profile,
+                    witnessRequirements: checkpoint.job.witnessRequirements,
+                    lane: .resumed
+                )
+                updateProofCheckpoint(
+                    profile: &profile,
+                    checkpointID: checkpointID,
+                    state: .queued,
+                    job: resumedJob,
+                    taskIdentifier: nil,
+                    lastError: "Stored proof artifact no longer verifies locally; rerunning in the resumed iPhone lane."
+                )
+                try await persist(profile)
+                proofArtifact = try await runQueuedProofCheckpoint(checkpointID: checkpointID)
+            }
+        } else {
+            let resumedJob = try tachyonProofAdapter.makeSendProofJob(
+                capsule: checkpoint.capsule,
+                profile: profile,
+                witnessRequirements: checkpoint.job.witnessRequirements,
+                lane: .resumed
+            )
+            updateProofCheckpoint(
+                profile: &profile,
+                checkpointID: checkpointID,
+                state: .queued,
+                job: resumedJob,
+                taskIdentifier: nil,
+                lastError: "Resuming pending proof in the foreground on the resumed Tachyon lane."
+            )
+            try await persist(profile)
+            proofArtifact = try await runQueuedProofCheckpoint(checkpointID: checkpointID)
+        }
+
+        profile = try await requireInitializedProfile()
+        guard let checkpointIndex = profile.shielded.pendingProofs.firstIndex(where: { $0.id == checkpointID }) else {
+            throw WalletError.resumableProofPending("The pending shielded send disappeared before authorization.")
+        }
+
+        let capsule = profile.shielded.pendingProofs[checkpointIndex].capsule
+        let authorization = try await authorizeSpend(
+            capsule.draft,
+            peerPresent: peerPresent,
+            privacyExposureDetected: privacyExposureDetected,
+            authorizationContext: biometricContext
+        )
+        var submission = ShieldedSpendSubmission(
+            draft: capsule.draft,
+            authorization: authorization,
+            source: capsule.source,
+            destinationDescriptorID: capsule.destinationDescriptorID,
+            outgoingTag: capsule.outgoingTag,
+            isIntroductionPayment: capsule.isIntroductionPayment,
+            recipientCiphertext: capsule.recipientCiphertext,
+            feeAuthorization: capsule.feeAuthorization,
+            tachyonEnvelope: nil,
+            tachyonProofArtifact: proofArtifact,
+            createdAt: Date()
+        )
+        submission.tachyonEnvelope = try tachyonTransactionAdapter.makeSubmissionEnvelope(
+            capsule: capsule,
+            proofArtifact: proofArtifact,
+            relayPayload: submission
+        )
+        let receipt = try await relayClient.submit(submission)
+
+        profile.shielded.pendingProofs.removeAll { $0.id == checkpointID }
+        if let noteIndex = profile.shielded.notes.firstIndex(where: { $0.id == capsule.source.noteID }) {
+            profile.shielded.notes[noteIndex].spendState = .pendingSubmission
+        }
+        if let relationshipID = capsule.relationshipID {
+            await shieldedStateCoordinator.finalizeSubmittedOutgoingTag(
+                profile: &profile,
+                relationshipID: relationshipID,
+                isIntroductionPayment: capsule.isIntroductionPayment
+            )
+        }
+        profile.shielded.latestFeeQuote = capsule.feeAuthorization.quote
+        try recalculateBalances(in: &profile)
+        try await persist(profile)
+        return receipt
+    }
+
+    func discardPendingShieldedSend(checkpointID: UUID) async throws {
+        guard configuration.supportsShieldedSpendPipeline else {
+            throw WalletError.featureUnavailable("PIR/tag/relay shielded spending")
+        }
+
+        var profile = try await requireInitializedProfile()
+        guard let checkpointIndex = profile.shielded.pendingProofs.firstIndex(where: { $0.id == checkpointID }) else {
+            throw WalletError.resumableProofPending("The selected shielded send is no longer queued.")
+        }
+
+        let checkpoint = profile.shielded.pendingProofs[checkpointIndex]
+        guard checkpoint.state != .running else {
+            throw WalletError.resumableProofPending("A Tachyon proof is still running. Wait for it to complete before discarding.")
+        }
+
+        if let relationshipID = checkpoint.capsule.relationshipID {
+            try await shieldedStateCoordinator.discardPreparedOutgoingTag(
+                profile: &profile,
+                relationshipID: relationshipID,
+                isIntroductionPayment: checkpoint.capsule.isIntroductionPayment
+            )
+        }
+
+        profile.shielded.pendingProofs.remove(at: checkpointIndex)
+        try await persist(profile)
+    }
+
+    func runPendingContinuedProcessingProof(
+        taskIdentifier: String,
+        progressSink: @escaping @Sendable (TachyonProofProgress) async -> Void
+    ) async throws -> TachyonProofArtifact {
+        var profile = try await requireInitializedProfile()
+        guard let checkpointIndex = profile.shielded.pendingProofs.firstIndex(where: { $0.taskIdentifier == taskIdentifier }) else {
+            throw WalletError.resumableProofPending("No persisted proof checkpoint matches \(taskIdentifier).")
+        }
+        return try await executeProofCheckpoint(
+            profile: &profile,
+            checkpointIndex: checkpointIndex,
+            progressSink: progressSink
+        )
+    }
+
+    private func runQueuedProofCheckpoint(checkpointID: UUID) async throws -> TachyonProofArtifact {
+        var profile = try await requireInitializedProfile()
+        guard let checkpointIndex = profile.shielded.pendingProofs.firstIndex(where: { $0.id == checkpointID }) else {
+            throw WalletError.resumableProofPending("No persisted proof checkpoint matches \(checkpointID.uuidString).")
+        }
+        return try await executeProofCheckpoint(profile: &profile, checkpointIndex: checkpointIndex)
+    }
+
+    private func executeProofCheckpoint(
+        profile: inout WalletProfile,
+        checkpointIndex: Int,
+        progressSink: @escaping @Sendable (TachyonProofProgress) async -> Void = { _ in }
+    ) async throws -> TachyonProofArtifact {
+        var checkpoint = profile.shielded.pendingProofs[checkpointIndex]
+        checkpoint.state = .running
+        checkpoint.progress = []
+        checkpoint.artifact = nil
+        checkpoint.lastError = nil
+        checkpoint.updatedAt = Date()
+        profile.shielded.pendingProofs[checkpointIndex] = checkpoint
+        try await persist(profile)
+
+        let pairedMacAvailable = profile.peers.contains { $0.kind == .mac }
+        let checkpointID = checkpoint.id
+
+        do {
+            let artifact = try await prover.prove(
+                job: checkpoint.job,
+                policy: profile.policy.proofPolicy,
+                pairedMacAvailable: pairedMacAvailable
+            ) { [self] progress in
+                await recordProofCheckpointProgress(checkpointID: checkpointID, progress: progress)
+                await progressSink(progress)
+            }
+            let verifiedArtifact = try tachyonProofAdapter.verify(artifact, for: checkpoint.job)
+
+            var refreshedProfile = try await requireInitializedProfile()
+            guard let refreshedIndex = refreshedProfile.shielded.pendingProofs.firstIndex(where: { $0.id == checkpointID }) else {
+                throw WalletError.resumableProofPending("Proof checkpoint disappeared before verification completed.")
+            }
+
+            refreshedProfile.shielded.pendingProofs[refreshedIndex].state = .proofReady
+            refreshedProfile.shielded.pendingProofs[refreshedIndex].progress = verifiedArtifact.progress
+            refreshedProfile.shielded.pendingProofs[refreshedIndex].artifact = verifiedArtifact
+            refreshedProfile.shielded.pendingProofs[refreshedIndex].lastError = nil
+            refreshedProfile.shielded.pendingProofs[refreshedIndex].updatedAt = verifiedArtifact.completedAt
+            try await persist(refreshedProfile)
+            return verifiedArtifact
+        } catch is CancellationError {
+            var refreshedProfile = try await requireInitializedProfile()
+            if let refreshedIndex = refreshedProfile.shielded.pendingProofs.firstIndex(where: { $0.id == checkpointID }) {
+                refreshedProfile.shielded.pendingProofs[refreshedIndex].state = .expired
+                refreshedProfile.shielded.pendingProofs[refreshedIndex].lastError = "Continued processing expired before spend authorization. The sealed send capsule remains resumable."
+                refreshedProfile.shielded.pendingProofs[refreshedIndex].updatedAt = Date()
+                try await persist(refreshedProfile)
+            }
+            throw WalletError.resumableProofPending("Continued processing expired. The sealed send capsule can be resumed when the app returns to the foreground.")
+        } catch {
+            var refreshedProfile = try await requireInitializedProfile()
+            if let refreshedIndex = refreshedProfile.shielded.pendingProofs.firstIndex(where: { $0.id == checkpointID }) {
+                refreshedProfile.shielded.pendingProofs[refreshedIndex].state = .failed
+                refreshedProfile.shielded.pendingProofs[refreshedIndex].lastError = error.localizedDescription
+                refreshedProfile.shielded.pendingProofs[refreshedIndex].updatedAt = Date()
+                try await persist(refreshedProfile)
+            }
+            throw error
+        }
+    }
+
+    private func recordProofCheckpointProgress(checkpointID: UUID, progress: TachyonProofProgress) async {
+        guard var profile = try? await bootstrap(),
+              let checkpointIndex = profile.shielded.pendingProofs.firstIndex(where: { $0.id == checkpointID })
+        else {
+            return
+        }
+
+        profile.shielded.pendingProofs[checkpointIndex].state = .running
+        profile.shielded.pendingProofs[checkpointIndex].progress.append(progress)
+        profile.shielded.pendingProofs[checkpointIndex].updatedAt = progress.updatedAt
+        try? await persist(profile)
     }
 
     func dashboard(
@@ -741,17 +1116,22 @@ actor RootWalletVault {
         let lastRefresh = configuration.supportsPIRStateUpdates
             ? (profile.shielded.pirSync.lastRefreshAt?.formatted(date: .omitted, time: .shortened) ?? "Never")
             : "Inactive"
+        let readinessClassification = profile.shielded.pirSync.readinessClassification
+        let trustedHeight = profile.shielded.pirSync.readinessLease?.trustedBlockHeight ?? profile.shielded.pirSync.lastKnownBlockHeight
         let pirStatus: String
         if !configuration.supportsPIRStateUpdates {
             pirStatus = "Inactive for current coin profile"
         } else if let error = profile.shielded.pirSync.lastError {
-            pirStatus = error
+            pirStatus = "\(readinessClassification.displayName) | H\(trustedHeight) | \(error)"
         } else {
-            pirStatus = "Height \(profile.shielded.pirSync.lastKnownBlockHeight) | \(profile.shielded.pirSync.lastBandwidth.totalBytes) B"
+            pirStatus = "\(readinessClassification.displayName) | H\(trustedHeight) | \(profile.shielded.pirSync.lastBandwidth.totalBytes) B"
         }
         let payReadiness = configuration.supportsShieldedSpendPipeline
-            ? (profile.shielded.pirSync.readyForImmediateSpend ? "Ready" : "Refresh needed")
+            ? spendReadinessLabel(for: profile)
             : "Inactive for current coin profile"
+        let relationshipPosture = relationshipPostureLabel(for: profile.shielded.relationships)
+        let proofQueueStatus = proofQueueStatusLabel(for: profile.shielded.pendingProofs)
+        let pendingShieldedSends = pendingShieldedSendSummaries(for: profile)
         let lastFeeQuote = configuration.supportsDynamicFeeMarkets
             ? (profile.shielded.latestFeeQuote.map { quote in
                 "\(quote.recommendedFee.formatted()) @ \(quote.marketRatePerWeight)"
@@ -767,15 +1147,325 @@ actor RootWalletVault {
             dayDescriptorFingerprint: evaluation.dayVisible ? profile.dayWallet?.activeDescriptor?.fingerprint : "Redacted",
             vaultDescriptorFingerprint: evaluation.vaultVisible ? unlockedVault?.activeDescriptor?.fingerprint : nil,
             proofVenue: lastProofVenue,
+            proofQueueStatus: proofQueueStatus,
+            pendingShieldedSends: pendingShieldedSends,
             isPrivacyRedacted: !evaluation.sensitiveUIVisible,
             captureDetected: privacyExposureDetected,
             pirStatus: pirStatus,
             lastPIRRefresh: lastRefresh,
             payReadiness: payReadiness,
+            relationshipPosture: relationshipPosture,
             lastFeeQuote: lastFeeQuote,
             trackedTagRelationships: profile.shielded.relationships.count,
             trackedNotes: profile.shielded.notes.count
         )
+    }
+
+    private func spendReadinessLabel(for profile: WalletProfile) -> String {
+        switch profile.shielded.pirSync.readinessClassification {
+        case .ready:
+            if profile.shielded.pirSync.readyForImmediateSpend {
+                return "Ready"
+            }
+            return profile.shielded.notes.isEmpty ? "No tracked notes" : "No spendable notes"
+        case .stale:
+            return "Quick private refresh required"
+        case .degraded:
+            return "Refresh degraded"
+        case .disputed:
+            return "Disputed; blocked"
+        }
+    }
+
+    private func relationshipPostureLabel(for relationships: [TagRelationshipSnapshot]) -> String {
+        guard !relationships.isEmpty else {
+            return "No tracked relationships"
+        }
+        let newCount = relationships.filter {
+            $0.state == .bootstrapPending || $0.state == .introductionSent || $0.state == .introductionReceived
+        }.count
+        let activeCount = relationships.filter { $0.state == .activeBidirectional }.count
+        let staleCount = relationships.filter { $0.state == .stale }.count
+        let rotatingCount = relationships.filter { $0.state == .rotationPending }.count
+        let revokedCount = relationships.filter { $0.state == .revoked }.count
+
+        var segments = [
+            "New \(newCount)",
+            "Active \(activeCount)",
+            "Stale \(staleCount)",
+            "Rotating \(rotatingCount)"
+        ]
+        if revokedCount > 0 {
+            segments.append("Revoked \(revokedCount)")
+        }
+        return segments.joined(separator: " | ")
+    }
+
+    private func proofQueueStatusLabel(for checkpoints: [TachyonProofCheckpoint]) -> String {
+        guard !checkpoints.isEmpty else {
+            return "Idle"
+        }
+
+        let runningCount = checkpoints.filter { $0.state == .running }.count
+        let queuedCount = checkpoints.filter { $0.state == .queued }.count
+        let readyCount = checkpoints.filter { $0.state == .proofReady }.count
+        let expiredCount = checkpoints.filter { $0.state == .expired }.count
+        let failedCount = checkpoints.filter { $0.state == .failed }.count
+
+        var segments: [String] = []
+        if runningCount > 0 {
+            segments.append("Running \(runningCount)")
+        }
+        if queuedCount > 0 {
+            segments.append("Queued \(queuedCount)")
+        }
+        if readyCount > 0 {
+            segments.append("Ready \(readyCount)")
+        }
+        if expiredCount > 0 {
+            segments.append("Resumable \(expiredCount)")
+        }
+        if failedCount > 0 {
+            segments.append("Failed \(failedCount)")
+        }
+
+        return segments.isEmpty ? "Idle" : segments.joined(separator: " | ")
+    }
+
+    private func pendingShieldedSendSummaries(for profile: WalletProfile) -> [PendingShieldedSendSummary] {
+        let relationshipsByID = Dictionary(uniqueKeysWithValues: profile.shielded.relationships.map { ($0.id, $0) })
+        return profile.shielded.pendingProofs
+            .map { checkpoint in
+                let trimmedMemo = checkpoint.capsule.draft.memo.trimmingCharacters(in: .whitespacesAndNewlines)
+                let alias = (
+                    checkpoint.capsule.relationshipID
+                        .flatMap { relationshipsByID[$0]?.alias }
+                )?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let counterpartyLabel: String
+                if let alias, !alias.isEmpty {
+                    counterpartyLabel = "To \(alias)"
+                } else if !trimmedMemo.isEmpty {
+                    counterpartyLabel = trimmedMemo
+                } else {
+                    counterpartyLabel = "Shielded send \(checkpoint.capsule.draft.id.uuidString.prefix(8))"
+                }
+                let memoLabel = !trimmedMemo.isEmpty && counterpartyLabel != trimmedMemo ? trimmedMemo : nil
+                return PendingShieldedSendSummary(
+                    id: checkpoint.id,
+                    counterpartyLabel: counterpartyLabel,
+                    memoLabel: memoLabel,
+                    amount: checkpoint.capsule.draft.amount.formatted(),
+                    tierLabel: checkpoint.capsule.draft.tier.displayName,
+                    state: checkpoint.state,
+                    stateLabel: proofQueueStateLabel(for: checkpoint.state),
+                    laneLabel: proofLaneLabel(for: checkpoint.job.lane),
+                    updatedAt: checkpoint.updatedAt,
+                    updatedAtLabel: checkpoint.updatedAt.formatted(date: .omitted, time: .shortened),
+                    detail: proofQueueDetail(for: checkpoint),
+                    actionLabel: proofQueueActionLabel(for: checkpoint.state),
+                    canDiscard: checkpoint.state != .running,
+                )
+            }
+            .sorted { lhs, rhs in
+                let leftPriority = proofQueueDisplayPriority(for: lhs.state)
+                let rightPriority = proofQueueDisplayPriority(for: rhs.state)
+                if leftPriority == rightPriority {
+                    return lhs.updatedAt > rhs.updatedAt
+                }
+                return leftPriority < rightPriority
+            }
+    }
+
+    private func latestActionableProofCheckpoint(from checkpoints: [TachyonProofCheckpoint]) -> TachyonProofCheckpoint? {
+        checkpoints
+            .compactMap { checkpoint -> (priority: Int, checkpoint: TachyonProofCheckpoint)? in
+                guard let priority = actionablePriority(for: checkpoint.state) else {
+                    return nil
+                }
+                return (priority, checkpoint)
+            }
+            .sorted { lhs, rhs in
+                if lhs.priority == rhs.priority {
+                    return lhs.checkpoint.updatedAt > rhs.checkpoint.updatedAt
+                }
+                return lhs.priority < rhs.priority
+            }
+            .first?
+            .checkpoint
+    }
+
+    private func nextActionableProofCheckpointID() async throws -> UUID {
+        let profile = try await requireInitializedProfile()
+        guard let checkpoint = latestActionableProofCheckpoint(from: profile.shielded.pendingProofs) else {
+            if profile.shielded.pendingProofs.contains(where: { $0.state == .running }) {
+                throw WalletError.resumableProofPending("A Tachyon proof is still running. Wait for it to complete before resuming.")
+            }
+            throw WalletError.resumableProofPending("No resumable shielded send is currently queued.")
+        }
+        return checkpoint.id
+    }
+
+    private func actionablePriority(for state: TachyonProofCheckpointState) -> Int? {
+        switch state {
+        case .proofReady:
+            return 0
+        case .expired:
+            return 1
+        case .queued:
+            return 2
+        case .failed:
+            return 3
+        case .running:
+            return nil
+        }
+    }
+
+    private func proofQueueDisplayPriority(for state: TachyonProofCheckpointState) -> Int {
+        switch state {
+        case .proofReady:
+            return 0
+        case .running:
+            return 1
+        case .expired:
+            return 2
+        case .queued:
+            return 3
+        case .failed:
+            return 4
+        }
+    }
+
+    private func proofQueueActionLabel(for state: TachyonProofCheckpointState) -> String? {
+        switch state {
+        case .proofReady:
+            return "Authorize Send"
+        case .expired:
+            return "Resume Proof"
+        case .queued:
+            return "Start Proof"
+        case .failed:
+            return "Retry Proof"
+        case .running:
+            return nil
+        }
+    }
+
+    private func proofQueueStateLabel(for state: TachyonProofCheckpointState) -> String {
+        switch state {
+        case .queued:
+            return "Queued"
+        case .running:
+            return "Running"
+        case .proofReady:
+            return "Ready"
+        case .expired:
+            return "Resumable"
+        case .failed:
+            return "Failed"
+        }
+    }
+
+    private func proofLaneLabel(for lane: TachyonProofLane) -> String {
+        switch lane {
+        case .foreground:
+            return "Foreground"
+        case .continuedProcessing:
+            return "Continued"
+        case .resumed:
+            return "Resumed"
+        }
+    }
+
+    private func proofQueueDetail(for checkpoint: TachyonProofCheckpoint) -> String {
+        if checkpoint.state == .proofReady {
+            return "Local proof verified. Awaiting biometric spend approval and relay submission."
+        }
+
+        if let progress = checkpoint.progress.last {
+            let percent = Int((progress.fractionCompleted * 100).rounded())
+            if let detail = progress.detail, !detail.isEmpty {
+                return "\(proofProgressLabel(for: progress.phase)) • \(percent)% • \(detail)"
+            }
+            return "\(proofProgressLabel(for: progress.phase)) • \(percent)% complete"
+        }
+
+        if let lastError = checkpoint.lastError, !lastError.isEmpty {
+            return lastError
+        }
+
+        switch checkpoint.state {
+        case .queued:
+            return "Sealed send capsule persisted and waiting for the next proof lane."
+        case .running:
+            return "Proof lane is actively processing this sealed send capsule."
+        case .expired:
+            return "Continued processing expired before authorization. Resume on the foreground Tachyon lane."
+        case .failed:
+            return "The last proof attempt failed before authorization. Retry from the persisted capsule."
+        case .proofReady:
+            return "Local proof verified. Awaiting biometric spend approval and relay submission."
+        }
+    }
+
+    private func proofProgressLabel(for phase: TachyonProofProgressPhase) -> String {
+        switch phase {
+        case .prepared:
+            return "Prepared"
+        case .witnessBound:
+            return "Witness Bound"
+        case .accumulated:
+            return "Accumulated"
+        case .compressed:
+            return "Compressed"
+        case .verified:
+            return "Verified"
+        }
+    }
+
+    private func enqueueProofCheckpoint(
+        profile: inout WalletProfile,
+        checkpointID: UUID,
+        capsule: TachyonSendCapsule,
+        job: TachyonProofJob,
+        taskIdentifier: String?
+    ) -> TachyonProofCheckpoint {
+        profile.shielded.pendingProofs.removeAll { $0.capsule.draft.id == capsule.draft.id }
+
+        let checkpoint = TachyonProofCheckpoint(
+            id: checkpointID,
+            taskIdentifier: taskIdentifier,
+            state: .queued,
+            capsule: capsule,
+            job: job,
+            progress: [],
+            artifact: nil,
+            lastError: nil,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        profile.shielded.pendingProofs.append(checkpoint)
+        return checkpoint
+    }
+
+    private func updateProofCheckpoint(
+        profile: inout WalletProfile,
+        checkpointID: UUID,
+        state: TachyonProofCheckpointState,
+        job: TachyonProofJob,
+        taskIdentifier: String?,
+        lastError: String?
+    ) {
+        guard let checkpointIndex = profile.shielded.pendingProofs.firstIndex(where: { $0.id == checkpointID }) else {
+            return
+        }
+
+        profile.shielded.pendingProofs[checkpointIndex].state = state
+        profile.shielded.pendingProofs[checkpointIndex].job = job
+        profile.shielded.pendingProofs[checkpointIndex].taskIdentifier = taskIdentifier
+        profile.shielded.pendingProofs[checkpointIndex].progress = []
+        profile.shielded.pendingProofs[checkpointIndex].artifact = nil
+        profile.shielded.pendingProofs[checkpointIndex].lastError = lastError
+        profile.shielded.pendingProofs[checkpointIndex].updatedAt = Date()
     }
 
     private func requireInitializedProfile() async throws -> WalletProfile {

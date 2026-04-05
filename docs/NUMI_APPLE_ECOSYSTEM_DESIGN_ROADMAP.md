@@ -20,7 +20,7 @@ Numi should feel like a sovereign instrument built natively for Apple hardware, 
 - iPhone is the authority device and the emotional center of the product.
 - Apple Watch is a wrist sentinel, not a mini wallet.
 - iPad is the clearest recovery and co-presence peer.
-- Mac is the proof lane, audit console, and power peer.
+- Mac is the diagnostics console and recovery peer, not a proof dependency.
 - Glass, blur, depth, motion, and haptics should clarify trust state and hierarchy, never decorate speculation.
 - Privacy wins over ambient convenience whenever the two conflict.
 
@@ -54,7 +54,7 @@ This last point matters for product design as much as protocol engineering. Some
 | iPhone | Authority wallet | Setup, receive, spend, vault access, recovery orchestration, peer management | A dense trading dashboard or a generic crypto control panel |
 | Apple Watch | Wrist sentinel | Neutral alerts, local presence handoff, session sealing, discreet trust-state awareness | A standalone wallet, a balance screen, or a recovery peer |
 | iPad | Recovery and presence peer | Hold fragment, confirm presence, approve re-enrollment, guide recovery drills | A second daily-spend wallet |
-| Mac | Proof coprocessor and recovery peer | Proof acceleration, peer admin, recovery approval, diagnostics, auditable system state | The authority signer or a remote trust dependency |
+| Mac | Diagnostics and recovery peer | Peer admin, recovery approval, diagnostics, auditable system state, proof queue visibility | The authority signer or a proof dependency |
 
 ## Design Language
 
@@ -247,12 +247,12 @@ iPad should be the clearest peer device in the ecosystem. It has enough screen a
 
 ### Product Role
 
-Mac should feel like a restrained coprocessor and peer workstation. It is where advanced users understand proof jobs, pair status, and recovery readiness without ever confusing the device for the authority signer.
+Mac should feel like a restrained diagnostics workstation and peer console. It is where advanced users understand proof jobs, pair status, and recovery readiness without ever confusing the device for the authority signer or a required proof engine.
 
 ### Core Surfaces
 
-- Proof lane
-  - Show local proving work, job status, and bounded progress.
+- Proof queue visibility
+  - Show checkpointed iPhone proving work, job status, and bounded progress.
 - Peer administration
   - Pair, inspect, rotate, and revoke trust records.
 - Recovery approval
@@ -271,7 +271,7 @@ Mac should feel like a restrained coprocessor and peer workstation. It is where 
 #### Phase 2: July 2026 to September 2026
 
 - Ship role-specific Mac peer flows.
-- Introduce proof-offload UX tied to explicit authority confirmation on iPhone.
+- Introduce proof-queue visibility and benchmark UX tied to explicit authority confirmation on iPhone.
 - Add diagnostics views useful for support, review, and security testing.
 
 ## Cross-Device Experience Roadmap
@@ -318,7 +318,7 @@ Target window: July 2026 to September 2026
 
 - Ship dedicated iPad and Mac peer experiences.
 - Turn recovery, presence, and re-enrollment into real multi-device journeys.
-- Give Mac a clear proof-lane identity.
+- Give Mac a clear diagnostics-and-recovery identity.
 
 ### Milestone C: Wrist Companion
 

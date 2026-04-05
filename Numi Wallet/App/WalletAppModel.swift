@@ -114,6 +114,7 @@ final class WalletAppModel: ObservableObject {
         hasStarted = true
         screenPrivacyMonitor?.start()
         Task {
+            await rootVault.prepareTachyonProofContinuation()
             await loadTrustLedger()
             await refreshSecurityPosture()
             await preparePairingInvitation()
@@ -147,7 +148,7 @@ final class WalletAppModel: ObservableObject {
             await refreshDashboard()
             recordEvent(
                 .shieldedStateRefreshed,
-                detail: "PIR refresh complete. Height \(report.lastKnownBlockHeight), \(report.spendableNoteCount) spendable note(s), \(report.bandwidth.totalBytes) bytes."
+                detail: "PIR refresh \(report.readinessClassification.displayName.lowercased()). Height \(report.lastKnownBlockHeight), discovered \(report.discoveredNoteCount), verified \(report.verifiedNoteCount), witness-fresh \(report.witnessFreshNoteCount), spendable \(report.spendableNoteCount), deferred \(report.deferredMatchCount), mismatches \(report.mismatchCount), \(report.bandwidth.totalBytes) bytes."
             )
         } catch {
             await refreshDashboard()
@@ -304,6 +305,12 @@ final class WalletAppModel: ObservableObject {
                 await refreshDashboard()
                 recordEvent(.transferSubmitted, detail: "Shielded spend submitted. Relay receipt: \(receipt.submissionID.uuidString.prefix(8)).")
             } catch {
+                if let walletError = error as? WalletError,
+                   case .resumableProofPending = walletError {
+                    await refreshDashboard()
+                    recordEvent(.proofDeferred, detail: walletError.localizedDescription)
+                    return
+                }
                 recordFailure(error)
             }
         }
@@ -494,6 +501,53 @@ final class WalletAppModel: ObservableObject {
         }
     }
 
+    func resumePendingShieldedSend(checkpointID: UUID, authorizationContext: LAContext) {
+        Task {
+            do {
+                let sendLabel = dashboard.pendingShieldedSends.first(where: { $0.id == checkpointID })
+                    .map { "\($0.amount) • \($0.counterpartyLabel)" }
+                    ?? "pending shielded spend"
+                let receipt = try await rootVault.resumePendingShieldedSend(
+                    checkpointID: checkpointID,
+                    peerPresent: peerPresent,
+                    privacyExposureDetected: privacyExposureDetected,
+                    authorizationContext: authorizationContext
+                )
+                await refreshDashboard()
+                recordEvent(.transferSubmitted, detail: "Resumed \(sendLabel). Relay receipt: \(receipt.submissionID.uuidString.prefix(8)).")
+            } catch {
+                if let walletError = error as? WalletError,
+                   case .resumableProofPending = walletError {
+                    await refreshDashboard()
+                    recordEvent(.proofDeferred, detail: walletError.localizedDescription)
+                    return
+                }
+                recordFailure(error)
+            }
+        }
+    }
+
+    func discardPendingShieldedSend(checkpointID: UUID, authorizationContext _: LAContext) {
+        Task {
+            do {
+                let sendLabel = dashboard.pendingShieldedSends.first(where: { $0.id == checkpointID })
+                    .map { "\($0.amount) • \($0.counterpartyLabel)" }
+                    ?? "pending shielded spend"
+                try await rootVault.discardPendingShieldedSend(checkpointID: checkpointID)
+                await refreshDashboard()
+                recordEvent(.proofDiscarded, detail: "Discarded \(sendLabel) from the persisted proof queue.")
+            } catch {
+                if let walletError = error as? WalletError,
+                   case .resumableProofPending = walletError {
+                    await refreshDashboard()
+                    recordEvent(.proofDeferred, detail: walletError.localizedDescription)
+                    return
+                }
+                recordFailure(error)
+            }
+        }
+    }
+
     private func preparePairingInvitation() async {
         do {
             let invitation = try await pairingChannel.makeInvitation()
@@ -621,11 +675,14 @@ final class WalletAppModel: ObservableObject {
             dayDescriptorFingerprint: "Redacted",
             vaultDescriptorFingerprint: nil,
             proofVenue: dashboard.proofVenue,
+            proofQueueStatus: dashboard.proofQueueStatus,
+            pendingShieldedSends: [],
             isPrivacyRedacted: true,
             captureDetected: isScreenCaptureActive,
             pirStatus: dashboard.pirStatus,
             lastPIRRefresh: dashboard.lastPIRRefresh,
             payReadiness: "Redacted",
+            relationshipPosture: dashboard.relationshipPosture,
             lastFeeQuote: dashboard.lastFeeQuote,
             trackedTagRelationships: dashboard.trackedTagRelationships,
             trackedNotes: dashboard.trackedNotes

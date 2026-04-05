@@ -25,6 +25,8 @@ enum WalletExperienceEventKind: String, Sendable {
     case authorityRecovered
     case panicWipe
     case proofCompleted
+    case proofDeferred
+    case proofDiscarded
     case privacyShieldRaised
     case peerPresenceEstablished
     case peerPresenceLost
@@ -66,6 +68,10 @@ enum WalletExperienceEventKind: String, Sendable {
             return "Local Unwrap Destroyed"
         case .proofCompleted:
             return "Proof Lane Completed"
+        case .proofDeferred:
+            return "Proof Capsule Preserved"
+        case .proofDiscarded:
+            return "Proof Capsule Discarded"
         case .privacyShieldRaised:
             return "Privacy Shield Raised"
         case .peerPresenceEstablished:
@@ -113,6 +119,10 @@ enum WalletExperienceEventKind: String, Sendable {
             return "flame.fill"
         case .proofCompleted:
             return "cpu.fill"
+        case .proofDeferred:
+            return "hourglass.circle.fill"
+        case .proofDiscarded:
+            return "xmark.circle.fill"
         case .privacyShieldRaised:
             return "eye.slash.fill"
         case .peerPresenceEstablished:
@@ -132,7 +142,7 @@ enum WalletExperienceEventKind: String, Sendable {
                 .recoveryPrepared, .recoveryShareImported, .recoveryShareExported, .authorityRecovered, .proofCompleted,
                 .peerPresenceEstablished:
             return .success
-        case .vaultSealed, .privacyShieldRaised, .peerPresenceLost, .sensitiveWorkspaceScrubbed:
+        case .vaultSealed, .privacyShieldRaised, .peerPresenceLost, .sensitiveWorkspaceScrubbed, .proofDeferred, .proofDiscarded:
             return .warning
         case .panicWipe, .failure:
             return .error

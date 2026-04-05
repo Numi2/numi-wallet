@@ -6,7 +6,9 @@ import BackgroundTasks
 
 final class BackgroundRefreshCoordinator {
     static let shared = BackgroundRefreshCoordinator()
-    static let taskIdentifier = "numi.wallet.pir-refresh"
+    static var taskIdentifier: String {
+        "\(Bundle.main.bundleIdentifier ?? "numi.Numi-Wallet").pir-refresh"
+    }
 
     private init() {}
 

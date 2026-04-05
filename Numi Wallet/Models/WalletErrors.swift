@@ -25,6 +25,8 @@ enum WalletError: LocalizedError {
     case misconfiguredService(String)
     case invalidRemoteResponse(String)
     case remoteServiceUnavailable(String)
+    case invalidProofArtifact(String)
+    case resumableProofPending(String)
     case corruptedState
     case userCancelled
 
@@ -78,6 +80,10 @@ enum WalletError: LocalizedError {
             return "\(service) returned an invalid response."
         case .remoteServiceUnavailable(let service):
             return "\(service) is unavailable in the current configuration."
+        case .invalidProofArtifact(let detail):
+            return "The local Tachyon proof artifact is invalid: \(detail)"
+        case .resumableProofPending(let detail):
+            return "The local proof lane stopped before authorization. \(detail)"
         case .corruptedState:
             return "The stored wallet state is corrupted."
         case .userCancelled:

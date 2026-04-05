@@ -7,6 +7,7 @@ See also:
 - [Numi Future Of Crypto Roadmap](NUMI_FUTURE_OF_CRYPTO_ROADMAP.md)
 - [Numi Architecture And Roadmap](NUMI_ARCHITECTURE_AND_ROADMAP.md)
 - [Numi State Of The Art Apple Plan](NUMI_STATE_OF_THE_ART_APPLE_PLAN.md)
+- [Numi Ragu iOS Invention](NUMI_RAGU_IOS_INVENTION.md)
 
 ## Purpose
 
@@ -22,6 +23,24 @@ It is written so an AI developer or a new engineer can move the Tachyon-readines
 
 This is not a protocol spec for Tachyon. It is Numi's implementation plan for becoming Tachyon-ready while the protocol is still evolving.
 
+## Current Shipping Restriction
+
+For the current Tachyon program, Numi is iOS only.
+
+This is the source of truth for the current milestone.
+
+That means:
+
+- the shipping target is the iPhone app on iOS
+- macOS, watchOS, visionOS, and companion-device trust flows are out of scope for the current Tachyon-ready milestone
+- no part of the current Tachyon milestone may depend on a Mac proof lane, watch approval lane, or companion-device local-auth path
+- if the repo still contains broader Apple-platform traces, they are cleanup debt, not product scope
+
+Important current-repo note:
+
+- `Numi Wallet.xcodeproj/project.pbxproj` still lists non-iOS supported platforms
+- AI developers should not treat that as permission to design a multi-platform Tachyon rollout
+
 ## How To Use This Guide
 
 1. Start from the dependency order in this document, not from whichever subsystem looks most interesting.
@@ -29,6 +48,189 @@ This is not a protocol spec for Tachyon. It is Numi's implementation plan for be
 3. Do not couple the SwiftUI shell to Tachyon internals. Keep Tachyon-specific logic behind adapter and capability boundaries.
 4. When a step says "do not continue until", stop there. Those are real dependency gates.
 5. For every technically difficult subsystem, implement the state model and test harness before implementing the product surface.
+6. Treat iOS background scheduling as best-effort. Design for truthful degradation, not magical reliability.
+
+## Apple iOS Capability Map
+
+These Apple platform capabilities are the authoritative building blocks for the current Tachyon program.
+
+Verified in the installed Xcode 26.4 / iPhoneOS 26.4 SDK:
+
+- `CryptoKit.SecureEnclave.MLDSA87`
+- `CryptoKit.MLDSA87`
+- `CryptoKit.XWingMLKEM768X25519`
+- `CryptoKit.HPKE.Ciphersuite.XWingMLKEM768X25519_SHA256_AES_GCM_256`
+- `BGAppRefreshTaskRequest`
+- `BGContinuedProcessingTaskRequest`
+- `BGContinuedProcessingTaskRequest.Resources.gpu`
+
+Verified missing from the installed iPhoneOS 26.4 SDK:
+
+- `LocalAuthenticationView`
+
+Platform capabilities Numi should rely on:
+
+- `LAContext` for device-owner authentication
+- Keychain with device-only accessibility for long-lived secret material
+- Secure Enclave `MLDSA87` for the authority root
+- DeviceCheck App Attest for remote request authenticity
+- `BGAppRefreshTaskRequest` for best-effort PIR readiness maintenance
+- `BGContinuedProcessingTaskRequest` for user-initiated long proof work
+- `UIApplicationProtectedDataWillBecomeUnavailable`
+- `UISceneDidEnterBackgroundNotification`
+- `URLSessionConfiguration.ephemeral`
+- Apple system TLS
+
+Platform capabilities Numi should not depend on for the current program:
+
+- `LocalAuthenticationView`
+- companion-device local authentication
+- proof offload to non-iOS peers
+- watch-mediated approval
+- non-Apple TLS stacks
+
+Apple references:
+
+- Local Authentication: <https://developer.apple.com/documentation/localauthentication/>
+- App Attest server validation: <https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server>
+- BackgroundTasks: <https://developer.apple.com/documentation/backgroundtasks>
+- Secure Enclave: <https://developer.apple.com/documentation/security/protecting-keys-with-the-secure-enclave>
+- Storing CryptoKit keys in the Keychain: <https://developer.apple.com/documentation/cryptokit/storing-cryptokit-keys-in-the-keychain>
+- Quantum-secure workflows: <https://developer.apple.com/documentation/cryptokit/enhancing-your-app-s-privacy-and-security-with-quantum-secure-workflows>
+- Quantum-secure TLS: <https://developer.apple.com/documentation/network/preparing-your-network-for-quantum-secure-encryption-in-tls>
+- Ephemeral URL sessions: <https://developer.apple.com/documentation/foundation/urlsessionconfiguration/ephemeral>
+- Protected data unavailable: <https://developer.apple.com/documentation/uikit/uiapplicationdelegate/applicationprotecteddatawillbecomeunavailable%28_%3A%29>
+
+## Tachyon Requirements Synthesized For iOS
+
+This section translates Tachyon's wallet-facing requirements into concrete iPhone product and engineering requirements for Numi.
+
+### 1. Kill Shielded Sync On iPhone
+
+Tachyon requirement:
+
+- wallets should not replay the full chain locally just to become spend-ready
+
+Numi iOS interpretation:
+
+- the iPhone should keep a private readiness cache that is refreshed through PIR
+- immediate-spend claims must be backed by fresh Merkle paths, fresh nullifier status, and a chain-state lease
+- when iOS background scheduling does not cooperate, the app must truthfully fall back to "quick private refresh required"
+
+Numi design:
+
+- `PIR Readiness Lease`
+  - a persisted record of trusted block height, anchor root, providers consulted, and expiry policy
+- `Refresh Ticket Ledger`
+  - a background-safe cache of precomputed query material, not of long-lived descriptor secrets
+- `Dispute Quarantine`
+  - if providers disagree, keep the last trusted state but block instant-spend claims
+
+### 2. Shared-Secret Discovery On iPhone
+
+Tachyon requirement:
+
+- wallets discover payments through tags and ratchets rather than whole-chain scanning
+
+Numi iOS interpretation:
+
+- the iPhone must maintain relationship state like a private messaging client
+- the wallet must survive app restarts and background scheduling without replaying relationship state incorrectly
+
+Numi design:
+
+- `Relationship Vault`
+  - state machine plus ratchet cursors, lookahead window, replay ledger
+- `Shielded Inbox Journal`
+  - append-only ingestion pipeline for matches, decryptions, and note creation
+
+### 3. Hidden Fee Markets On iPhone
+
+Tachyon requirement:
+
+- wallets commit to hidden maximum fees and authorize hotkeys to settle at live market rates
+
+Numi iOS interpretation:
+
+- the iPhone must separate proving from final market settlement so long proof work does not force the user to rebuild the whole send whenever a quote expires
+
+Numi design:
+
+- `Send Capsule`
+  - a sealed, proof-ready transaction draft that survives quote expiry
+- `Fee Grant`
+  - a short-lived authorization scoped to one quote and one finalized draft digest
+
+### 4. Recursive Proofs On iPhone
+
+Tachyon requirement:
+
+- wallets must support proof-bearing transaction assembly with evolving recursive proof formats
+
+Numi iOS interpretation:
+
+- default proving must run on the iPhone
+- user-initiated long proof work should use iOS continued-processing facilities where possible
+- the authority iPhone must verify proof artifacts before final approval
+
+Numi design:
+
+- `Proof Capsule`
+  - a sealed proof job input with explicit digests and resumable progress
+- `Continued Proof Lane`
+  - a `BGContinuedProcessingTaskRequest`-backed path for long-running user-initiated proof jobs
+
+### 5. Post-Quantum Address Resolution On iPhone
+
+Tachyon requirement:
+
+- large post-quantum identity documents resolve privately from compact identifiers
+
+Numi iOS interpretation:
+
+- the iPhone must treat counterparties as contact documents, not reusable addresses
+- the UI must never keep giant documents resident in observable state longer than necessary
+
+Numi design:
+
+- `Contact Document Vault`
+  - digest-pinned cached documents plus freshness and dispute state
+
+### 6. Governance On iPhone
+
+Tachyon requirement:
+
+- wallets prove eligible, unspent balance for voting without moving funds
+
+Numi iOS interpretation:
+
+- governance must be a separate proof lane with checkpointed inputs and its own failure model
+
+Numi design:
+
+- `Governance Checkpoint Vault`
+  - stores checkpoint height, proof inputs, and vote receipts separately from spend state
+
+## What Is Firm Versus Uncertain
+
+### Firm Enough To Build Around Now
+
+- PIR-backed wallet readiness is central to Tachyon's public direction.
+- Tachyon is explicitly separating payment delivery from the shielded protocol.
+- Ragu and recursive proof-carrying data are central to the proof architecture.
+- The local iPhoneOS 26.4 SDK exposes the PQ primitives and background-processing APIs Numi needs for an iPhone-only path.
+- App Attest, Local Authentication, Keychain, scene lifecycle, and protected-data handling are all appropriate platform anchors for Numi.
+
+### Still Uncertain Or Incomplete
+
+- public Tachyon materials do not yet pin the final wallet wire format for every message and proof stage
+- public materials do not yet fully specify a server-signing or slashing contract for PIR lies
+- the final governance proof format is not public enough to hard-code today
+- the exact PQ address publication and resolution semantics may still change
+- operational availability of the `BGContinuedProcessingTaskRequest` GPU resource entitlement needs more product and deployment validation
+- current Numi App Attest code generates assertions, but does not yet implement the full attest-key bootstrap flow Apple expects
+
+Whenever one of these uncertain areas becomes concrete, update the adapter and manifest layer first, not the UI.
 
 ## Non-Negotiable Invariants
 
@@ -39,25 +241,28 @@ These invariants should be enforced throughout the execution plan:
 3. Protocol capabilities must be explicit in manifests and runtime state.
 4. "No sync" cannot mean "blind trust in a server." It means private refresh with bounded verification strategy.
 5. Relationship discovery state must be recoverable enough for normal wallet life, but must not collapse into a reusable address model.
-6. Proof acceleration on Mac is optional. Proof correctness verification on iPhone is mandatory.
-7. Post-quantum migration must not be bolted on later. Data models introduced now must leave room for large identities and new key structure.
+6. The current shipping plan may not depend on a Mac, watch, or companion device.
+7. Proof correctness verification on iPhone is mandatory.
+8. Post-quantum migration must not be bolted on later. Data models introduced now must leave room for large identities and new key structure.
 
 ## Dependency Order
 
 Do the work in this order:
 
-1. Capability model and manifest topology
-2. Tachyon adapter boundary
-3. PIR subsystem v2
-4. Relationship and ratchet state machine
-5. Shadow receive and note-ingestion pipeline
-6. Fee privacy subsystem
-7. Transaction builder and proof job contracts
-8. Real proof integration
-9. Post-quantum address resolution
-10. Governance and nullifier-proof lane
-11. Pool migration product flow
-12. Audit, benchmarks, and failure drills
+1. Lock iOS-only scope and platform configuration
+2. Establish the Tachyon lab
+3. Capability model and manifest topology
+4. Tachyon adapter boundary
+5. PIR subsystem v2
+6. Relationship and ratchet state machine
+7. Shadow receive and note-ingestion pipeline
+8. Fee privacy subsystem
+9. Transaction builder and proof job contracts
+10. Real proof integration on iPhone
+11. Post-quantum address resolution
+12. Governance and nullifier-proof lane
+13. Pool migration product flow
+14. Audit, benchmarks, and failure drills
 
 This order matters.
 
@@ -66,6 +271,7 @@ Examples:
 - Do not implement real Tachyon proving before the adapter boundary exists.
 - Do not build shadow receive before the PIR and ratchet state models are stable.
 - Do not build governance UI before governance checkpoint and proof input models exist.
+- Do not rely on background refresh or continued processing before platform configuration, Info.plist keys, and entitlements are explicitly handled.
 
 ## Repo Baseline
 
@@ -77,10 +283,60 @@ The current codebase already gives the execution plan several useful anchors:
 - `DynamicFeeEngine` already has a placeholder bundle model for quote, commitment, hotkey, and settlement.
 - `RootWalletVault` already contains the dominant authority-wallet orchestration boundary.
 - `LocalProver` exists as the future proving seam.
+- `BackgroundRefreshCoordinator` already schedules `BGAppRefreshTaskRequest`.
+- `ScreenPrivacyMonitor` already reacts to capture and protected-data loss.
 
-That means the right next move is not "start proving." The right next move is "stabilize the adapter and capability surface so everything else can land cleanly."
+Current repo gaps that matter for Tachyon on iOS:
 
-## Step 0: Establish The Tachyon Lab
+- no explicit iOS-only Tachyon scope lock in build settings or docs
+- `Config/NumiWallet-Info.plist` now carries the background task identifiers, but there is still no checked-in entitlements file for Tachyon-critical platform features
+- no full App Attest bootstrap and attestation-registration lifecycle
+- no real proof backend for recursive shielded spends
+- no explicit proof execution context separating foreground, continued-processing CPU, and continued-processing GPU grants
+- no chunked GPU prover that can publish progress and stop cleanly on expiration
+- the Tachyon adapter boundary is present, but still mock-heavy and not yet bound to a production proving backend
+
+That means the right next move is not "start proving." The right next move is "stabilize scope, the adapter boundary, and the state model so everything else can land cleanly."
+
+## Step 0: Lock iOS-Only Scope And Platform Configuration
+
+This is the first execution step because the current repo still carries broader platform traces.
+
+Primary files:
+
+- `Numi Wallet.xcodeproj/project.pbxproj`
+- `Config/NumiWallet-Info.plist`
+- future entitlements file
+
+Current problem:
+
+- supported platforms still include non-iOS entries
+- the checked-in Info.plist now includes background task identifiers, but the biometric usage copy and entitlement wiring are still incomplete
+- entitlements for App Attest and continued-processing GPU experiments are not yet explicit in the repo
+
+Tasks:
+
+1. Treat `iphoneos` and `iphonesimulator` as the only supported platforms for the current Tachyon program.
+2. Decide whether iPad remains supported as the same iOS binary or whether the shipping target is iPhone-only. Document that choice in the project and docs.
+3. Add or verify these iOS configuration items:
+   - `BGTaskSchedulerPermittedIdentifiers`
+   - `NSFaceIDUsageDescription`
+   - App Attest environment entitlement if required by the deployment setup
+   - continued-processing GPU entitlement only if the product truly intends to ship a GPU-enabled background proof lane
+4. Remove any planning dependency on macOS, watchOS, or visionOS features from the Tachyon milestone.
+5. Document the current minimum iOS version required for:
+   - PQ primitives
+   - App Attest
+   - app refresh
+   - continued processing
+
+Do not continue until:
+
+- the product scope is explicitly iOS-only in docs
+- background-task identifiers and biometric usage descriptions are part of the build configuration story
+- AI developers no longer have to guess whether Mac or watch paths are in scope
+
+## Step 1: Establish The Tachyon Lab
 
 This is mandatory before any major subsystem work.
 
@@ -112,9 +368,9 @@ Do not continue until:
 - a local harness can return deterministic PIR responses
 - the team has at least one golden state-refresh fixture
 
-## Step 1: Capability Model And Manifest Topology
+## Step 2: Capability Model And Manifest Topology
 
-This is the first code change that should land.
+This is the first major code change that should land.
 
 Primary files:
 
@@ -126,13 +382,13 @@ Primary files:
 
 Current problem:
 
-- `CoinProtocolCapabilities` is too small and boolean-only.
-- Tachyon needs more than yes/no toggles. It needs feature families and service topology that can evolve without breaking the app shell.
+- `CoinProtocolCapabilities` is too small and boolean-only
+- Tachyon needs more than yes/no toggles; it needs feature families and service topology that can evolve without breaking the app shell
 
 Implement in this order:
 
 1. Introduce named capability groups.
-   - State refresh
+   - state refresh
    - discovery
    - fee privacy
    - relay submission
@@ -141,7 +397,7 @@ Implement in this order:
    - migration
 2. For each group, add a mode or version field rather than only a boolean.
 3. Keep a compatibility layer so the current preview manifest still loads.
-4. Add service topology for distinct PIR classes instead of a single PIR bucket if needed by the runtime.
+4. Add service topology for distinct PIR classes instead of a single PIR bucket where needed.
 5. Add manifest validation rules that reject impossible combinations.
 
 Examples of invalid combinations:
@@ -150,7 +406,7 @@ Examples of invalid combinations:
 - hidden-fee settlement enabled without fee quote and relay settlement topology
 - governance enabled without a checkpoint or proof-input source
 
-Add acceptance checks:
+Acceptance checks:
 
 - the manifest loader rejects invalid topology with explicit errors
 - the dashboard can render inactive, partial, and active capability states
@@ -161,7 +417,7 @@ Do not continue until:
 - the manifest can represent Tachyon without abuse of placeholder booleans
 - runtime code can branch on capability mode instead of ad hoc string checks
 
-## Step 2: Define The Tachyon Adapter Boundary
+## Step 3: Define The Tachyon Adapter Boundary
 
 This is the most important architectural decision in the whole program.
 
@@ -174,7 +430,7 @@ Primary files:
 
 Current problem:
 
-- `RootWalletVault` orchestrates shielded work, but there is no protocol adapter boundary that isolates Tachyon transaction semantics from the app shell.
+- `RootWalletVault` orchestrates shielded work, but there is no protocol adapter boundary that isolates Tachyon transaction semantics from the app shell
 
 Create a dedicated adapter contract before implementing any real Tachyon logic.
 
@@ -192,7 +448,6 @@ The shell should continue to own:
 - authority approval
 - secure storage
 - policy gating
-- peer and Mac job orchestration
 - capability gating
 - UI state
 
@@ -226,7 +481,7 @@ Do not continue until:
 - there is a clean Swift protocol or module boundary for Tachyon-specific logic
 - a mocked adapter can drive state refresh and draft transaction assembly without the real proof backend
 
-## Step 3: PIR Subsystem V2
+## Step 4: PIR Subsystem V2
 
 This is one of the hardest subsystems and needs more rigor than a transport client.
 
@@ -249,6 +504,26 @@ For Tachyon readiness, Numi needs:
 - degraded mode that is honest and reversible
 - evidence capture when a provider lies or diverges
 
+### iOS-Only Design Constraint
+
+Background refresh on iOS is best-effort. It is not a daemon.
+
+That means Numi cannot assume descriptor secrets will be available in the background, and cannot assume the scheduler will wake the app exactly when desired.
+
+Use this design:
+
+- keep long-lived descriptor and ratchet secrets in `WhenUnlockedThisDeviceOnly` storage
+- precompute background-safe query material while the app is foregrounded and unlocked
+- store only query tokens needed for refresh:
+  - note commitments
+  - nullifiers
+  - ratchet lookahead tags
+  - contact document identifiers
+- persist those tokens in a short-lived `Refresh Ticket Ledger`
+- derive wallet readiness from a `Readiness Lease`, not from the assumption that background refresh always ran
+
+This is the core iOS invention that makes Tachyon's "no sync" goal compatible with strict key handling.
+
 ### Data Model Changes
 
 Add explicit models for:
@@ -260,25 +535,25 @@ Add explicit models for:
 - mismatch event
 - dispute evidence snapshot
 - anchor-root freshness state
+- `PIRReadinessLease`
+- `PIRRefreshTicket`
 
-Suggested additions:
+Repository implementation note as of April 5, 2026:
 
-- `PIRProvider`
-- `PIRQueryPolicy`
-- `PIRQueryReceipt`
-- `PIRMismatchRecord`
-- `PIRDisputeEvidence`
-- `ShieldedAnchorState`
+- `PIRSyncSnapshot` now persists provider receipts, mismatch events, dispute evidence, a readiness lease, and a short-lived refresh-ticket ledger.
+- `ShieldedStateCoordinator` now preserves the last trusted lease on stale or disputed responses and can fall back to cached discovery tickets during iOS background refresh.
+- `WalletDashboardState` now surfaces readiness posture as `ready`, `stale`, `degraded`, or `disputed` instead of a binary refresh flag.
+- True multi-provider compare-two and quorum verification are still future work; the current implementation records provider-scoped evidence and internal consistency failures first.
 
 ### Execution Order
 
-1. Split `PIRClient` responsibilities.
+1. Split `PIRClient` responsibilities:
    - transport
    - request encoding
    - response verification
    - provider selection
 2. Add a provider registry in runtime configuration.
-3. Introduce per-query-class policies.
+3. Introduce per-query-class policies:
    - single provider
    - compare-two
    - quorum
@@ -289,6 +564,8 @@ Suggested additions:
    - stale
    - degraded
    - disputed
+7. Teach the refresh coordinator to use only precomputed refresh tickets when protected data is unavailable.
+8. When the app returns to foreground, reconcile refresh tickets against live secret state before claiming readiness.
 
 ### Verification Strategy
 
@@ -322,14 +599,18 @@ Add tests for:
 - one provider omitting a tag match
 - response signature present but invalid
 - no provider available
+- protected data unavailable while refresh tickets exist
+- no refresh tickets available for a background attempt
 
 Do not continue until:
 
 - refresh results are persisted with provider and chain-state context
 - the app can distinguish stale from disputed
 - immediate-spend posture is blocked when verification confidence is insufficient
+- background refresh can run without loading long-lived descriptor secret material
+- the wallet can say "quick private refresh required" without presenting it as failure
 
-## Step 4: Relationship And Ratchet State Machine
+## Step 5: Relationship And Ratchet State Machine
 
 This is the second hard subsystem. The main risk is accidental reinvention of a weak messaging protocol.
 
@@ -366,11 +647,24 @@ Persist separately:
 - replay window or replay digest set
 - introduction material provenance
 
+Repository implementation note as of April 5, 2026:
+
+- `TagRelationshipSnapshot` now persists explicit relationship state, lookahead cursor state, last accepted incoming tag, ciphertext replay digests, and introduction provenance.
+- `ShieldedStateCoordinator` now rejects replayed inbound matches before decryption, advances ratchets only after successful payload handling, and finalizes outbound relationship state after successful relay submission.
+- The dashboard now summarizes relationship posture as new, active, stale, or rotating.
+- Rotation is scaffolded in the persisted model but full relationship-rotation migration is still future work.
+
 Do not conflate:
 
 - contact identity
 - receive descriptor
 - ratchet material
+
+On iOS specifically:
+
+- do not store full contact documents or relationship state in observable UI models
+- do not store plaintext introduction payloads in scratch text buffers
+- precompute only bounded lookahead material for background use
 
 ### Execution Order
 
@@ -417,7 +711,7 @@ Do not continue until:
 - relationship state survives app restart
 - the wallet can explain whether a contact is new, active, stale, or rotating
 
-## Step 5: Shadow Receive And Note Ingestion
+## Step 6: Shadow Receive And Note Ingestion
 
 This is where the app starts becoming operationally useful before full spend support.
 
@@ -446,13 +740,15 @@ Execution order:
    - verified
    - witness-fresh
    - immediately spendable
+6. Add a `Shielded Inbox Journal` so partial receive work can be resumed safely after termination or protected-data loss.
 
 Do not continue until:
 
 - shadow receive can ingest fixture notes end to end
 - discovered notes and spendable notes are clearly separated in state and UI
+- interrupted receive work can resume without duplicating notes
 
-## Step 6: Fee Privacy And Hotkey Settlement
+## Step 7: Fee Privacy And Hotkey Settlement
 
 This subsystem is hard because it sits between wallet UX, remote services, and proof logic.
 
@@ -475,6 +771,23 @@ The implementation must separate five concerns that are currently too close toge
 4. hotkey authorization
 5. relay settlement and refund accounting
 
+### iOS-Only Design Constraint
+
+Long proof work and short fee-quote validity are in tension on iPhone.
+
+Do not force the user to redo the whole send if only the quote expires.
+
+Use this design:
+
+- build a `Send Capsule` that contains:
+  - selected notes
+  - recipient resolution result
+  - outgoing discovery material
+  - draft digest
+  - proof-ready witness digest
+- keep the live fee quote and hotkey grant outside that capsule
+- if a quote expires, preserve the capsule and re-run only the quote and final authorization path
+
 ### Required Data Boundaries
 
 Keep these objects separate:
@@ -484,6 +797,7 @@ Keep these objects separate:
 - `HiddenFeeCommitment`
 - `FeeHotkeyGrant`
 - `FeeSettlementResult`
+- `SendCapsule`
 
 Do not use one bundle type internally for all logic just because the UI eventually displays one summary.
 
@@ -501,6 +815,7 @@ Do not use one bundle type internally for all logic just because the UI eventual
    - settled fee
    - returned difference
 5. Keep the proof-backed commitment behind an adapter boundary so the real proving backend can replace the placeholder.
+6. Persist proof-ready send capsules under device-only protection so user work survives non-destructive interruptions.
 
 ### Failure Cases To Model
 
@@ -524,8 +839,9 @@ Do not continue until:
 
 - fee privacy state is modeled as a sequence, not one opaque bundle
 - the UI can explain confidence and failure without exposing the maximum fee commitment
+- quote expiry does not force reconstruction of the entire send intent
 
-## Step 7: Transaction Builder And Proof Job Contracts
+## Step 8: Transaction Builder And Proof Job Contracts
 
 This is where most architecture collapses if the team is careless.
 
@@ -547,10 +863,10 @@ Define builder stages explicitly:
 1. note selection
 2. witness selection
 3. recipient resolution
-4. outgoing discovery/tag material
+4. outgoing discovery and tag material
 5. fee intent and quote
 6. transaction draft assembly
-7. proof job creation
+7. proof capsule creation
 8. proof attachment
 9. local verification
 10. authority approval
@@ -567,28 +883,37 @@ Add wallet-internal models for:
 - `TachyonProofJob`
 - `TachyonProofArtifact`
 - `TachyonSubmissionEnvelope`
+- `TachyonSendCapsule`
 
 Keep these internal models decoupled from the final on-wire encoding if possible.
 
-### Mac Offload Contract
+### iPhone Proof Contract
 
-Define the proof offload contract before implementing transport:
+Define one proof contract for all iPhone proof lanes:
+
+- foreground proof
+- `BGContinuedProcessingTaskRequest` proof
+- future resumed proof after interruption
+
+The contract should include:
 
 - job ID
 - wallet state digest
 - transaction draft digest
-- witness fragment digest
+- witness digest
+- quote-binding state if relevant
 - expiry
 - transcript digest
 - returned proof artifact digest
+- progress model
 
-The Mac may:
+The proof lane may:
 
 - compute proofs
 - compress proofs
 - return benchmark metrics
 
-The Mac may not:
+The proof lane may not:
 
 - authorize spend
 - mutate the canonical draft
@@ -605,37 +930,81 @@ On the iPhone:
 
 Do not continue until:
 
-- local and Mac proof jobs share the same contract
 - the iPhone remains the final verifier before spend authorization
+- foreground and continued-processing proof jobs share the same contract
 
-## Step 8: Real Proof Integration
+## Step 9: Real Proof Integration On iPhone
 
-Only begin this after Steps 2 through 7 are complete.
+Only begin this after Steps 2 through 8 are complete.
 
 Primary files:
 
 - `Numi Wallet/Core/LocalProver.swift`
 - Tachyon proof adapter modules
-- Mac proof-offload modules
 
 Execution order:
 
 1. land a mock proof backend that obeys the real proof job contract
 2. land a benchmarkable local proof runner
-3. land Mac offload using the same contract
+3. land a `BGContinuedProcessingTaskRequest` proof lane using the same contract
 4. only then switch one pathway to the real proving backend
 
 This staged approach matters because otherwise the team will blur:
 
-- transport failures
+- platform scheduling failures
 - proof failures
 - job-shape failures
 - UI failures
 
+### Recommended `BGContinuedProcessingTaskRequest` Model
+
+Use continued processing only for user-initiated long proof work, never for silent background proving.
+
+Recommended execution ladder:
+
+1. start the proof in the foreground immediately so the user action always maps to visible progress
+2. submit a continued-processing request only for proof jobs that are expected to outlive a background transition
+3. keep CPU continued processing as the default background lane
+4. request GPU resources only when the signed app has the entitlement, `BGTaskScheduler.supportedResources.contains(.gpu)` is true at runtime, and the proof job is chunked enough to publish progress and stop on expiration
+5. if GPU submission is rejected or unsupported, retry the same checkpoint on continued-processing CPU or stay on the foreground or resumable lane
+6. on expiration, persist the sealed proof capsule and mark the send as resumable
+
+Architectural recommendation:
+
+- separate proof lane from execution grant. A proof job may be `.foreground`, `.continuedProcessing`, or `.resumed`, but the prover still needs an explicit execution context such as foreground-unrestricted, continued-processing CPU, or continued-processing GPU
+- forbid background Metal work unless the continued-processing request both asked for `.gpu` and the signed build is entitled to use it
+- chunk GPU proving into bounded epochs that can publish progress regularly and checkpoint between epochs
+
+Uncertainty:
+
+- the GPU resource path requires the `com.apple.developer.background-tasks.continued-processing.gpu` entitlement
+- not all devices support background GPU use, and runtime behavior under heavy GPU contention still needs empirical validation
+- App Review and deployment expectations for this entitlement still need operational research
+
+Fallback:
+
+- if continued processing or GPU resources are unavailable, remain in the foreground or resumable proof path and communicate that clearly
+
+Repository implementation note as of April 5, 2026:
+
+- `TachyonProofCheckpoint` is now persisted in shielded wallet state with the sealed send capsule, proof job, progress timeline, returned artifact, and resumable status.
+- `TachyonProofContinuationCoordinator` now registers an iOS continued-processing handler under a wildcard task identifier, reports progress through `NSProgress`, and submits with `.fail` semantics.
+- `RootWalletVault.submitSpend` now checkpoints the send proof before execution, attempts a `BGContinuedProcessingTaskRequest` lane first, falls back to the foreground lane if immediate scheduling is unavailable, and keeps proof-ready or expired checkpoints persisted until authorization and relay submission complete. The current call site still submits with `requestGPU: false`.
+- `RootWalletVault.resumePendingShieldedSend(checkpointID:...)` and `discardPendingShieldedSend(checkpointID:...)` now operate on specific persisted capsules: proof-ready checkpoints go straight to local authorization and relay submission, expired/queued/failed checkpoints rerun on the `resumed` lane before authorization, and discarding an unsent introduction capsule safely unwinds the bootstrap relationship instead of stranding it.
+- The dashboard now exposes a real checkpoint browser for pending shielded sends, including per-capsule state, lane, freshness, resume/authorize actions, and destructive discard behind privileged local authentication.
+- `Config/NumiWallet-Info.plist` now includes `BGTaskSchedulerPermittedIdentifiers` for app refresh and Tachyon proof wildcard identifiers, but there is still no checked-in entitlements file.
+- `LocalProver` still attempts Metal whenever a device and pipeline are available. That is acceptable for foreground proofing, but it is the wrong default for a background CPU-only continued-processing grant.
+
+Remaining follow-on work on this tranche:
+
+- add a checked-in entitlements file and provisioning story for any GPU-enabled continued-processing build
+- add an explicit proof execution context and wire it from scheduler outcome to prover behavior
+- refactor the GPU path into checkpointable epochs instead of a single blocking Metal dispatch
+- benchmark foreground, continued-processing CPU, and optional continued-processing GPU behavior on supported devices before shipping the GPU path
+
 Benchmark requirements:
 
 - iPhone proof latency by device class
-- Mac proof latency by device class
 - payload sizes before and after compression
 - battery and thermal observations where available
 
@@ -643,8 +1012,9 @@ Do not continue until:
 
 - the proof subsystem can be benchmarked independently of the rest of the wallet
 - the proof contract can fail cleanly without corrupting draft state
+- a long-running proof can be suspended or expired without losing the sealed send capsule
 
-## Step 9: Post-Quantum Address Resolution
+## Step 10: Post-Quantum Address Resolution
 
 Primary files:
 
@@ -665,18 +1035,18 @@ Execution order:
    - resolution disputed
 5. add rotation and revocation handling for contact documents
 
-Hard rules:
+On iOS specifically:
 
-- never teach the user that a large document is "their address"
-- never silently use a stale cached document when the policy requires fresh resolution
-- keep resolution evidence if providers disagree
+- keep only compact previews and digests in UI-facing state
+- keep full resolved documents in a `Contact Document Vault`
+- never keep full large identity documents resident in SwiftUI view models longer than necessary
 
 Do not continue until:
 
 - contacts can be resolved privately from short identifiers
 - resolution freshness and dispute state are visible to the wallet core
 
-## Step 10: Governance And Nullifier Proofs
+## Step 11: Governance And Nullifier Proofs
 
 Primary files:
 
@@ -710,11 +1080,16 @@ Add tests for:
 - proof generation failure
 - same note becoming ineligible after spend
 
+On iOS specifically:
+
+- governance proof work should reuse the same proof capsule and continued-processing infrastructure where possible
+- vote review and vote approval should be clearly distinct from spend approval
+
 Do not continue until:
 
 - governance proofs are modeled as first-class wallet work, not as an afterthought piggybacking on spend UI
 
-## Step 11: Pool Migration
+## Step 12: Pool Migration
 
 Primary files:
 
@@ -739,7 +1114,7 @@ Do not continue until:
 
 - the wallet can explain what has migrated, what remains, and what is blocked
 
-## Step 12: Audit, Benchmarks, And Failure Drills
+## Step 13: Audit, Benchmarks, And Failure Drills
 
 This is not optional cleanup. It is part of implementation.
 
@@ -757,9 +1132,39 @@ Mandatory drills:
 - all PIR providers unavailable
 - ratchet state replay attempt
 - fee quote expires mid-send
-- proof offload returns mismatched artifact
+- continued-processing proof expires mid-job
 - governance checkpoint stale
 - migration interrupted halfway through
+
+## App Attest Bootstrap Work
+
+This deserves its own section because the current repo is not finished here.
+
+Current repo gap:
+
+- `AppAttestProvider` generates keys and assertions
+- it does not yet model the full Apple attestation bootstrap and server-validation lifecycle
+
+Required iOS flow:
+
+1. generate a device-local App Attest key ID
+2. send an attestation challenge from the server
+3. call `attestKey`
+4. have the server verify and register the attested key
+5. only after successful registration treat assertions from that key as normal
+6. for critical requests, generate assertions over client data that includes replay-resistant server input
+
+Numi design:
+
+- `Attestation Session`
+  - a short-lived server-issued replay context for multiple requests
+- `Assertion Receipt`
+  - local record of which attested key and which replay context was used
+
+Uncertainty:
+
+- the exact server challenge bundling strategy for background-friendly requests needs more backend design work
+- the current code path that signs only the request body is not enough to claim full replay resistance by itself
 
 ## Suggested File Additions
 
@@ -774,6 +1179,8 @@ These are likely additions needed to keep the work coherent:
 - `Numi Wallet/Networking/AddressResolutionClient.swift`
 - `Numi Wallet/Core/GovernanceCoordinator.swift`
 - `Numi Wallet/Core/MigrationPlanner.swift`
+- `Numi Wallet/Core/PIRReadinessLedger.swift`
+- `Numi Wallet/Core/SendCapsuleStore.swift`
 
 ## Task Template For AI Developers
 
@@ -797,8 +1204,10 @@ If a task cannot fill in those eight fields, it is not ready to implement.
 3. Do not store relationship and contact state in one undifferentiated blob.
 4. Do not hide quote expiry, dispute state, or degraded mode behind generic "network error" copy.
 5. Do not introduce one giant transaction type that mixes draft state, proof state, relay state, and settlement state.
-6. Do not couple the Mac proof-offload path to a different proof job shape than the iPhone local path.
+6. Do not couple foreground proofing and continued-processing proofing to different proof job shapes.
 7. Do not claim "instant spend" unless witness freshness and nullifier confidence are actually sufficient.
+8. Do not load long-lived descriptor secrets in background refresh paths if refresh tickets suffice.
+9. Do not assume App Attest is complete until the server-verified attestation bootstrap exists.
 
 ## Stop Conditions
 
@@ -809,6 +1218,7 @@ Pause and re-evaluate the execution plan if any of these become true:
 - transaction or proof structure changes eliminate the current bundle/action/stamp boundary
 - large-address resolution semantics become incompatible with the current contact model
 - governance requires new trust assumptions that violate Numi's doctrine
+- iOS background scheduling or entitlement constraints make the continued-processing proof lane non-viable for real users
 
 ## Sources
 

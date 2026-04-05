@@ -541,6 +541,10 @@ struct WalletDashboardView: View {
                 ) {
                     model.runProof()
                 }
+
+                if !model.dashboard.pendingShieldedSends.isEmpty {
+                    pendingShieldedSendQueue
+                }
             }
         }
     }
@@ -602,6 +606,30 @@ struct WalletDashboardView: View {
         ) {
             ForEach(transitGuidance) { step in
                 NumiTimelineRow(step: step)
+            }
+        }
+    }
+
+    private var pendingShieldedSendQueue: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Pending Shielded Sends")
+                .font(.system(.headline, design: .rounded).weight(.semibold))
+                .foregroundStyle(.white)
+
+            Text("Each sealed capsule keeps its own proof state so authority approval can target the exact send being resumed or discarded.")
+                .font(.system(.caption, design: .rounded).weight(.medium))
+                .foregroundStyle(Color.white.opacity(0.66))
+
+            ForEach(model.dashboard.pendingShieldedSends) { summary in
+                NumiPendingShieldedSendRow(
+                    summary: summary,
+                    onResume: {
+                        requestPrivilegedAction(.resumePendingShieldedSend(summary))
+                    },
+                    onDiscard: {
+                        requestPrivilegedAction(.discardPendingShieldedSend(summary))
+                    }
+                )
             }
         }
     }
@@ -1002,6 +1030,8 @@ struct WalletDashboardView: View {
         [
             NumiSignal(title: "Peer Trust", value: model.peerTrustStatus, icon: "checkmark.seal.fill", accent: NumiPalette.aqua),
             NumiSignal(title: "PIR Refresh", value: model.dashboard.lastPIRRefresh, icon: "clock.arrow.trianglehead.counterclockwise.rotate.90", accent: NumiPalette.mint),
+            NumiSignal(title: "Proof Queue", value: model.dashboard.proofQueueStatus, icon: "hourglass.circle.fill", accent: NumiPalette.gold),
+            NumiSignal(title: "Relationships", value: model.dashboard.relationshipPosture, icon: "person.2.fill", accent: NumiPalette.aqua),
             NumiSignal(title: "Fee Posture", value: model.dashboard.lastFeeQuote, icon: "bitcoinsign.circle.fill", accent: NumiPalette.coral),
             NumiSignal(title: "Spend Readiness", value: model.dashboard.payReadiness, icon: "arrow.up.forward.circle.fill", accent: NumiPalette.gold)
         ]
@@ -1230,6 +1260,10 @@ struct WalletDashboardView: View {
             model.exportRecoveryShare(authorizationContext: authorizationContext)
         case .panicWipe:
             model.panicWipe(authorizationContext: authorizationContext)
+        case .resumePendingShieldedSend(let summary):
+            model.resumePendingShieldedSend(checkpointID: summary.id, authorizationContext: authorizationContext)
+        case .discardPendingShieldedSend(let summary):
+            model.discardPendingShieldedSend(checkpointID: summary.id, authorizationContext: authorizationContext)
         }
     }
 
@@ -2020,6 +2054,10 @@ struct NumiMacConsoleView: View {
             model.exportRecoveryShare(authorizationContext: authorizationContext)
         case .panicWipe:
             model.panicWipe(authorizationContext: authorizationContext)
+        case .resumePendingShieldedSend(let summary):
+            model.resumePendingShieldedSend(checkpointID: summary.id, authorizationContext: authorizationContext)
+        case .discardPendingShieldedSend(let summary):
+            model.discardPendingShieldedSend(checkpointID: summary.id, authorizationContext: authorizationContext)
         }
     }
 
@@ -2119,6 +2157,7 @@ struct NumiMacConsoleView: View {
     private var proofMetrics: [NumiMacMetric] {
         [
             NumiMacMetric(label: "Proof Venue", value: model.dashboard.proofVenue, icon: "cpu.fill", tint: NumiPalette.aqua),
+            NumiMacMetric(label: "Proof Queue", value: model.dashboard.proofQueueStatus, icon: "hourglass.circle.fill", tint: NumiPalette.gold),
             NumiMacMetric(label: "Spend Readiness", value: model.dashboard.payReadiness, icon: "arrow.up.forward.circle.fill", tint: NumiPalette.mint),
             NumiMacMetric(label: "Last PIR Refresh", value: model.dashboard.lastPIRRefresh, icon: "clock.arrow.circlepath", tint: NumiPalette.gold),
             NumiMacMetric(label: "Fee Posture", value: model.dashboard.lastFeeQuote, icon: "bitcoinsign.circle.fill", tint: NumiPalette.coral)
@@ -2999,6 +3038,139 @@ private struct NumiFeatureButton: View {
     }
 }
 
+private struct NumiPendingShieldedSendRow: View {
+    let summary: PendingShieldedSendSummary
+    let onResume: () -> Void
+    let onDiscard: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(summary.counterpartyLabel)
+                        .font(.system(.headline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(.white)
+
+                    if let memoLabel = summary.memoLabel {
+                        Text(memoLabel)
+                            .font(.system(.caption, design: .rounded).weight(.medium))
+                            .foregroundStyle(Color.white.opacity(0.62))
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                Text(summary.amount)
+                    .font(.system(.subheadline, design: .rounded).weight(.bold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.trailing)
+            }
+
+            ViewThatFits {
+                HStack(spacing: 8) {
+                    statusBadges
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    statusBadges
+                }
+            }
+
+            Text(summary.detail)
+                .font(.system(.footnote, design: .rounded).weight(.medium))
+                .foregroundStyle(Color.white.opacity(0.72))
+                .lineLimit(3)
+
+            HStack(spacing: 10) {
+                if let actionLabel = summary.actionLabel {
+                    queueActionButton(
+                        title: actionLabel,
+                        icon: summary.state == .proofReady ? "paperplane.circle.fill" : "arrow.clockwise.circle.fill",
+                        tint: stateTint,
+                        action: onResume
+                    )
+                }
+
+                if summary.canDiscard {
+                    queueActionButton(
+                        title: "Discard",
+                        icon: "xmark.circle.fill",
+                        tint: NumiPalette.coral,
+                        action: onDiscard
+                    )
+                }
+            }
+        }
+        .padding(16)
+        .background {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.055))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(stateTint.opacity(0.22), lineWidth: 1)
+                }
+        }
+    }
+
+    private var statusBadges: some View {
+        Group {
+            NumiStateBadge(title: summary.stateLabel, icon: stateIcon, tint: stateTint)
+            NumiStateBadge(title: summary.tierLabel, icon: "creditcard.circle.fill", tint: NumiPalette.aqua)
+            NumiStateBadge(title: summary.laneLabel, icon: "cpu.fill", tint: NumiPalette.gold)
+            NumiStateBadge(title: "Updated \(summary.updatedAtLabel)", icon: "clock.fill", tint: Color.white.opacity(0.34))
+        }
+    }
+
+    @ViewBuilder
+    private func queueActionButton(title: String, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(tint.opacity(0.14))
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .stroke(tint.opacity(0.42), lineWidth: 1)
+                        }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var stateTint: Color {
+        switch summary.state {
+        case .proofReady:
+            return NumiPalette.mint
+        case .running, .expired:
+            return NumiPalette.gold
+        case .queued:
+            return NumiPalette.aqua
+        case .failed:
+            return NumiPalette.coral
+        }
+    }
+
+    private var stateIcon: String {
+        switch summary.state {
+        case .queued:
+            return "tray.and.arrow.down.fill"
+        case .running:
+            return "hourglass.circle.fill"
+        case .proofReady:
+            return "checkmark.shield.fill"
+        case .expired:
+            return "arrow.clockwise.circle.fill"
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+}
+
 private struct NumiTimelineRow: View {
     let step: JourneyStep
 
@@ -3582,7 +3754,7 @@ private enum NumiPrivilegedAuthenticationMode {
     case biometric
 }
 
-private enum NumiPrivilegedAction: String, Identifiable {
+private enum NumiPrivilegedAction: Identifiable {
     case unlockVault
     case sendDayPayment
     case sendVaultPayment
@@ -3591,12 +3763,37 @@ private enum NumiPrivilegedAction: String, Identifiable {
     case importPeerShare
     case exportPeerShare
     case panicWipe
+    case resumePendingShieldedSend(PendingShieldedSendSummary)
+    case discardPendingShieldedSend(PendingShieldedSendSummary)
 
-    var id: String { rawValue }
+    var id: String {
+        switch self {
+        case .unlockVault:
+            return "unlockVault"
+        case .sendDayPayment:
+            return "sendDayPayment"
+        case .sendVaultPayment:
+            return "sendVaultPayment"
+        case .prepareRecoveryPair:
+            return "prepareRecoveryPair"
+        case .recoverAuthority:
+            return "recoverAuthority"
+        case .importPeerShare:
+            return "importPeerShare"
+        case .exportPeerShare:
+            return "exportPeerShare"
+        case .panicWipe:
+            return "panicWipe"
+        case .resumePendingShieldedSend(let summary):
+            return "resumePendingShieldedSend.\(summary.id.uuidString)"
+        case .discardPendingShieldedSend(let summary):
+            return "discardPendingShieldedSend.\(summary.id.uuidString)"
+        }
+    }
 
     var authenticationMode: NumiPrivilegedAuthenticationMode {
         switch self {
-        case .sendDayPayment, .sendVaultPayment, .exportPeerShare:
+        case .sendDayPayment, .sendVaultPayment, .exportPeerShare, .resumePendingShieldedSend, .discardPendingShieldedSend:
             return .biometric
         case .unlockVault, .prepareRecoveryPair, .recoverAuthority, .importPeerShare, .panicWipe:
             return .deviceOwner
@@ -3619,6 +3816,10 @@ private enum NumiPrivilegedAction: String, Identifiable {
             return "Peer Share Export"
         case .panicWipe:
             return "Panic Custody Action"
+        case .resumePendingShieldedSend:
+            return "Pending Send Queue"
+        case .discardPendingShieldedSend:
+            return "Queued Capsule Destruction"
         }
     }
 
@@ -3640,6 +3841,13 @@ private enum NumiPrivilegedAction: String, Identifiable {
             return "Approve peer share export"
         case .panicWipe:
             return "Approve local unwrap destruction"
+        case .resumePendingShieldedSend(let summary):
+            if summary.state == .proofReady {
+                return "Approve \(summary.amount) shielded send"
+            }
+            return "Resume \(summary.amount) shielded send"
+        case .discardPendingShieldedSend(let summary):
+            return "Discard \(summary.amount) shielded send"
         }
     }
 
@@ -3661,6 +3869,10 @@ private enum NumiPrivilegedAction: String, Identifiable {
             return "Exporting a peer fragment requires a tighter biometric gate before the sealed share leaves storage."
         case .panicWipe:
             return "Destroying local unwrap state is intentionally destructive and must never be ambient."
+        case .resumePendingShieldedSend(let summary):
+            return "\(summary.counterpartyLabel). \(summary.detail)"
+        case .discardPendingShieldedSend(let summary):
+            return "\(summary.counterpartyLabel). This clears the persisted sealed capsule without submitting it to the relay."
         }
     }
 
@@ -3680,6 +3892,10 @@ private enum NumiPrivilegedAction: String, Identifiable {
             return "square.and.arrow.up.fill"
         case .panicWipe:
             return "flame.fill"
+        case .resumePendingShieldedSend(let summary):
+            return summary.state == .proofReady ? "paperplane.circle.fill" : "hourglass.circle.fill"
+        case .discardPendingShieldedSend:
+            return "xmark.circle.fill"
         }
     }
 
@@ -3692,6 +3908,10 @@ private enum NumiPrivilegedAction: String, Identifiable {
         case .prepareRecoveryPair, .recoverAuthority, .importPeerShare, .exportPeerShare:
             return NumiPalette.aqua
         case .panicWipe:
+            return NumiPalette.coral
+        case .resumePendingShieldedSend(let summary):
+            return summary.state == .proofReady ? NumiPalette.gold : NumiPalette.mint
+        case .discardPendingShieldedSend:
             return NumiPalette.coral
         }
     }
@@ -3712,15 +3932,26 @@ private enum NumiPrivilegedAction: String, Identifiable {
             return "Approve local recovery share export"
         case .panicWipe:
             return "Destroy local Numi vault unwrap state"
+        case .resumePendingShieldedSend(let summary):
+            return summary.state == .proofReady ? "Approve resumed Numi spend" : "Resume queued Numi proof"
+        case .discardPendingShieldedSend:
+            return "Discard queued Numi spend capsule"
         }
     }
 
     var systemPromise: String {
-        switch authenticationMode {
-        case .deviceOwner:
+        switch self {
+        case .unlockVault, .prepareRecoveryPair, .recoverAuthority, .importPeerShare, .panicWipe:
             return "Numi will use Apple device-owner authentication and reuse that approval for the actual vault or recovery operation."
-        case .biometric:
+        case .sendDayPayment, .sendVaultPayment, .exportPeerShare:
             return "Numi will use a biometric approval and reuse that authorization for the actual protected keychain read."
+        case .resumePendingShieldedSend(let summary):
+            if summary.state == .proofReady {
+                return "Numi will use a biometric approval and reuse that authorization for the actual spend authorization before relay submission."
+            }
+            return "Numi will use a biometric approval, resume the persisted proof lane locally, and only then authorize relay submission on device."
+        case .discardPendingShieldedSend:
+            return "Numi will use a biometric approval before deleting the persisted sealed capsule. No relay submission will be sent."
         }
     }
 }

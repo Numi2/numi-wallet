@@ -700,6 +700,22 @@ struct LocalProofArtifact: Codable, Sendable {
     var completedAt: Date
 }
 
+struct PendingShieldedSendSummary: Identifiable, Sendable {
+    var id: UUID
+    var counterpartyLabel: String
+    var memoLabel: String?
+    var amount: String
+    var tierLabel: String
+    var state: TachyonProofCheckpointState
+    var stateLabel: String
+    var laneLabel: String
+    var updatedAt: Date
+    var updatedAtLabel: String
+    var detail: String
+    var actionLabel: String?
+    var canDiscard: Bool
+}
+
 struct WalletDashboardState: Sendable {
     var role: DeviceRole
     var isInitialized: Bool
@@ -710,11 +726,14 @@ struct WalletDashboardState: Sendable {
     var dayDescriptorFingerprint: String?
     var vaultDescriptorFingerprint: String?
     var proofVenue: String
+    var proofQueueStatus: String
+    var pendingShieldedSends: [PendingShieldedSendSummary]
     var isPrivacyRedacted: Bool
     var captureDetected: Bool
     var pirStatus: String
     var lastPIRRefresh: String
     var payReadiness: String
+    var relationshipPosture: String
     var lastFeeQuote: String
     var trackedTagRelationships: Int
     var trackedNotes: Int
@@ -730,11 +749,14 @@ struct WalletDashboardState: Sendable {
             dayDescriptorFingerprint: nil,
             vaultDescriptorFingerprint: nil,
             proofVenue: "Not started",
+            proofQueueStatus: "Idle",
+            pendingShieldedSends: [],
             isPrivacyRedacted: false,
             captureDetected: false,
             pirStatus: "PIR state unavailable",
             lastPIRRefresh: "Never",
             payReadiness: "Not ready",
+            relationshipPosture: "No tracked relationships",
             lastFeeQuote: "No fee quote",
             trackedTagRelationships: 0,
             trackedNotes: 0

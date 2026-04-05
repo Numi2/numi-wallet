@@ -200,7 +200,7 @@ The current repo is a prototype shell with meaningful security structure already
 - Production coin adapters for real settlement rails.
 - Real receive decryption, note parsing, and witness construction against live protocol specs.
 - Real zero-knowledge proving backend for fee commitments and spends.
-- Mac proof-coprocessor protocol.
+- Mac diagnostics-grade peer workflows for proof queue visibility, recovery administration, and audit support.
 - Production-grade recovery UX that fully eliminates the transitional workspace.
 - Dedicated iPad and Mac peer UX tuned to their roles.
 - Dedicated Apple Watch companion UX tuned to its sentinel role.
@@ -251,7 +251,7 @@ This section documents the most important design choices reflected in the curren
   - Provides mobile peer presence and recovery approval.
 - Recovery Mac
   - Stores the second recovery fragment in device-only protected storage.
-  - Provides the best proof offload target because of thermals and GPU budget.
+  - Provides recovery approval, peer administration, and diagnostics without becoming a proof dependency.
 - Apple Watch companion
   - Mirrors neutral state and deliberate prompts from the authority iPhone.
   - Must not hold recovery fragments, authority keys, or standalone spend capability.
@@ -265,7 +265,7 @@ This section documents the most important design choices reflected in the curren
 - Canonical profile boundary
   - Wallet profile files may contain descriptors and encrypted vault blobs, but should not contain plaintext descriptor private keys or recovery fragments.
 - Local peer boundary
-  - All quorum recovery and proof delegation should stay inside user-owned devices over local authenticated channels.
+  - All quorum recovery and peer-trust activity should stay inside user-owned devices over local authenticated channels.
 - Remote boundary
   - Discovery and relay only handle padded envelopes and blinded lookups.
   - Remote endpoints must verify App Attest and reject replay or downgrade paths.
@@ -391,7 +391,7 @@ Target design:
 - Explicit session roles:
   - recovery approval
   - vault presence
-  - proof offload
+  - proof queue visibility
   - receive handoff
 
 ### 4. Build The Real Receive Scanner
@@ -445,7 +445,6 @@ The single prototype shell should split into role-shaped experiences.
   - mobile companion for vault unlock and peer approval
 - Mac:
   - recovery peer
-  - proof coprocessor
   - advanced diagnostics and peer administration
 
 The shared wallet core should remain common, but the UI should not pretend every device is the same app with a different toggle.
@@ -547,13 +546,14 @@ Deliverables:
 - note selection and transaction construction
 - proof witness builder
 - on-device proof generation
-- paired Mac proof offload
+- iPhone continued-processing proof lane with CPU-first fallback and optional entitlement-gated GPU acceleration
 - final spend approval flow
 
 Exit criteria:
 
 - iPhone can prove and submit alone
-- Mac can accelerate but never replace authority
+- continued processing can expire without losing the sealed send capsule
+- GPU acceleration remains optional and never a correctness dependency
 
 ### Phase 4: Recovery Productization
 
@@ -591,7 +591,7 @@ If the team executes only the highest-leverage next steps, they should be:
 2. Delete the recovery `TextEditor` flow and replace it with bounded transfer paths.
 3. Build the local `Network.framework` session layer for pairing, approval, and presence.
 4. Implement the real receive scanning and note ingestion path.
-5. Build the real spend/proof pipeline and Mac proof offload protocol.
+5. Build the real spend/proof pipeline and the iPhone continued-processing proof ladder.
 
 ## Definition Of Done For Numi 1.0
 

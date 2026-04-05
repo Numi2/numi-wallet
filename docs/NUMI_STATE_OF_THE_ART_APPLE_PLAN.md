@@ -334,19 +334,20 @@ It must not become:
 
 ### Mac
 
-Mac should become the proof lane and diagnostics peer.
+Mac should become the diagnostics peer and recovery operator console.
 
 It should own:
 
-- proof job execution and visibility
 - trust record administration
 - recovery approval
 - diagnostics and audit-friendly state
+- proof queue visibility and benchmark reporting sourced from the authority iPhone
 
 It must not become:
 
 - the canonical signer
 - a remote dependency for normal use
+- a required proof coprocessor
 
 ## State Of The Art Technical Plan
 
@@ -391,7 +392,7 @@ Target: next major implementation cycle
 
 1. iPad peer home for recovery and presence approval.
 2. iPad recovery drill mode with large, explicit, role-labeled steps.
-3. Mac proof lane with bounded proof queue and progress reporting.
+3. Mac diagnostics surface with bounded proof queue visibility, benchmark reporting, and recovery controls.
 4. Mac diagnostics surface:
    - App Attest health
    - key material posture
@@ -470,7 +471,7 @@ The long-term codebase should converge toward this structure:
 - proximity and co-presence
 - trust records
 - recovery transfer sessions
-- proof delegation
+- proof queue visibility and benchmark capture
 
 ### Coin and protocol domain
 

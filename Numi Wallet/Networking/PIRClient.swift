@@ -1,5 +1,57 @@
 import Foundation
 
+struct PIRTransportReceipt: Sendable {
+    var queryClass: PIRQueryClass
+    var provider: PIRProviderIdentity
+    var requestDigest: Data
+    var responseDigest: Data
+    var receivedAt: Date
+}
+
+struct PIRVerifiedResult<Response: Sendable>: Sendable {
+    var response: Response
+    var receipt: PIRTransportReceipt
+}
+
+private enum PIREndpoint {
+    case merklePaths
+    case nullifiers
+    case tags
+
+    var path: String {
+        switch self {
+        case .merklePaths:
+            return "merkle-paths"
+        case .nullifiers:
+            return "nullifiers"
+        case .tags:
+            return "tags"
+        }
+    }
+
+    var kind: EnvelopeKind {
+        switch self {
+        case .merklePaths:
+            return .pirMerklePaths
+        case .nullifiers:
+            return .pirNullifiers
+        case .tags:
+            return .pirTags
+        }
+    }
+
+    var queryClass: PIRQueryClass {
+        switch self {
+        case .merklePaths:
+            return .merklePaths
+        case .nullifiers:
+            return .nullifierStatuses
+        case .tags:
+            return .tagDiscovery
+        }
+    }
+}
+
 actor PIRClient {
     private let configuration: RemoteServiceConfiguration
     private let codec: EnvelopeCodec
@@ -22,61 +74,54 @@ actor PIRClient {
         self.decoder.dateDecodingStrategy = .iso8601
     }
 
-    func fetchMerklePaths(for commitments: [Data]) async throws -> PIRMerklePathResponse {
+    func fetchMerklePaths(for commitments: [Data]) async throws -> PIRVerifiedResult<PIRMerklePathResponse> {
         guard configuration.supportsPIRStateUpdates else {
             throw WalletError.featureUnavailable("PIR state updates")
         }
         return try await post(
-            path: "merkle-paths",
-            kind: .pirMerklePaths,
+            endpoint: .merklePaths,
             requestBody: PIRMerklePathRequest(noteCommitments: commitments),
             responseType: PIRMerklePathResponse.self,
             budget: configuration.pirEnvelopeSize
         )
     }
 
-    func fetchNullifierStatuses(_ nullifiers: [Data]) async throws -> PIRNullifierStatusResponse {
+    func fetchNullifierStatuses(_ nullifiers: [Data]) async throws -> PIRVerifiedResult<PIRNullifierStatusResponse> {
         guard configuration.supportsPIRStateUpdates else {
             throw WalletError.featureUnavailable("PIR state updates")
         }
         return try await post(
-            path: "nullifiers",
-            kind: .pirNullifiers,
+            endpoint: .nullifiers,
             requestBody: PIRNullifierStatusRequest(nullifiers: nullifiers),
             responseType: PIRNullifierStatusResponse.self,
             budget: configuration.pirEnvelopeSize
         )
     }
 
-    func fetchTagMatches(_ tags: [Data]) async throws -> PIRTagLookupResponse {
+    func fetchTagMatches(_ tags: [Data]) async throws -> PIRVerifiedResult<PIRTagLookupResponse> {
         guard configuration.supportsPIRStateUpdates else {
             throw WalletError.featureUnavailable("PIR state updates")
         }
         return try await post(
-            path: "tags",
-            kind: .pirTags,
+            endpoint: .tags,
             requestBody: PIRTagLookupRequest(tags: tags),
             responseType: PIRTagLookupResponse.self,
             budget: configuration.pirEnvelopeSize
         )
     }
 
-    private func post<Request: Encodable, Response: Decodable>(
-        path: String,
-        kind: EnvelopeKind,
+    private func post<Request: Encodable, Response: Decodable & Sendable>(
+        endpoint: PIREndpoint,
         requestBody: Request,
         responseType: Response.Type,
         budget: Int
-    ) async throws -> Response {
-        guard let baseURL = configuration.pirURL else {
-            throw WalletError.misconfiguredService("PIR service")
-        }
+    ) async throws -> PIRVerifiedResult<Response> {
+        let (baseURL, provider) = try selectedProvider()
+        let body = try encodeRequestBody(requestBody)
+        let requestDigest = TachyonSupport.digest(body)
+        let envelope = try await makeEnvelope(kind: endpoint.kind, body: body, budget: budget)
 
-        let body = try encoder.encode(requestBody)
-        let attestation = try await requiredAttestation(for: body)
-        let envelope = try codec.makeEnvelope(kind: kind, payload: body, attestation: attestation, budget: budget)
-
-        var request = URLRequest(url: baseURL.appending(path: path))
+        var request = URLRequest(url: baseURL.appending(path: endpoint.path))
         request.httpMethod = "POST"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = session.configuration.timeoutIntervalForRequest
@@ -94,10 +139,46 @@ actor PIRClient {
         }
 
         do {
-            return try decoder.decode(responseType, from: data)
+            let decodedResponse = try decoder.decode(responseType, from: data)
+            return PIRVerifiedResult(
+                response: decodedResponse,
+                receipt: PIRTransportReceipt(
+                    queryClass: endpoint.queryClass,
+                    provider: provider,
+                    requestDigest: requestDigest,
+                    responseDigest: TachyonSupport.digest(data),
+                    receivedAt: Date()
+                )
+            )
         } catch {
             throw WalletError.invalidRemoteResponse("PIR service")
         }
+    }
+
+    private func selectedProvider() throws -> (URL, PIRProviderIdentity) {
+        guard let baseURL = configuration.pirURL else {
+            throw WalletError.misconfiguredService("PIR service")
+        }
+        let displayName = baseURL.host(percentEncoded: false) ?? "pir-provider"
+        let portSuffix = baseURL.port.map { ":\($0)" } ?? ""
+        let serviceOrigin = "\(baseURL.scheme ?? "https")://\(displayName)\(portSuffix)"
+        return (
+            baseURL,
+            PIRProviderIdentity(
+                id: providerID(for: serviceOrigin),
+                displayName: displayName,
+                serviceOrigin: serviceOrigin
+            )
+        )
+    }
+
+    private func encodeRequestBody<Request: Encodable>(_ requestBody: Request) throws -> Data {
+        try encoder.encode(requestBody)
+    }
+
+    private func makeEnvelope(kind: EnvelopeKind, body: Data, budget: Int) async throws -> PaddedEnvelope {
+        let attestation = try await requiredAttestation(for: body)
+        return try codec.makeEnvelope(kind: kind, payload: body, attestation: attestation, budget: budget)
     }
 
     private func requiredAttestation(for body: Data) async throws -> AppAttestArtifact {
@@ -110,5 +191,11 @@ actor PIRClient {
     private func iso8601String(from date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         return formatter.string(from: date)
+    }
+
+    private func providerID(for serviceOrigin: String) -> String {
+        let digest = TachyonSupport.digest(string: serviceOrigin)
+        let prefix = digest.prefix(6).map { String(format: "%02x", $0) }.joined()
+        return "pir-\(prefix)"
     }
 }
