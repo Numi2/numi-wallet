@@ -25,6 +25,7 @@ struct AppleSecurityPostureClient {
     func scan(role: DeviceRole, isScreenCaptureActive: Bool) -> AppleSecurityPosture {
         let capabilities = [
             postQuantumRootCapability(),
+            postQuantumTransportCapability(),
             ownerAuthenticationCapability(),
             appAttestationCapability(),
             nearbyTrustCapability(for: role),
@@ -61,20 +62,20 @@ struct AppleSecurityPostureClient {
         return AppleSecurityCapability(
             id: .postQuantumRoot,
             title: "Post-Quantum Root",
-            shortValue: "Software Fallback",
-            detail: "This simulator build uses software ML-DSA storage. Physical devices should bind the wallet root to Secure Enclave hardware.",
-            recommendation: "Validate authority flows on a physical iPhone before trusting the hardware boundary.",
+            shortValue: "Hardware Root Absent",
+            detail: "Secure Enclave-backed ML-DSA87 keys are unavailable in Simulator. Numi's authority root is designed for hardware-backed devices only.",
+            recommendation: "Use a physical Apple device for authority and recovery validation.",
             systemImage: "shield.lefthalf.filled",
-            state: .attention
+            state: .limited
         )
         #else
         let secureEnclaveAvailable = SecureEnclave.isAvailable
         return AppleSecurityCapability(
             id: .postQuantumRoot,
             title: "Post-Quantum Root",
-            shortValue: secureEnclaveAvailable ? "Secure Enclave ML-DSA" : "Hardware Root Missing",
+            shortValue: secureEnclaveAvailable ? "Secure Enclave ML-DSA87" : "Hardware Root Missing",
             detail: secureEnclaveAvailable
-                ? "This device can keep the wallet authority key in Secure Enclave-backed ML-DSA storage."
+                ? "This device can keep the wallet authority key in Secure Enclave-backed ML-DSA87 storage."
                 : "Secure Enclave is unavailable, so the intended hardware root of trust cannot be enforced.",
             recommendation: secureEnclaveAvailable
                 ? "Keep the authority root on this device and avoid exporting trust material."
@@ -83,6 +84,18 @@ struct AppleSecurityPostureClient {
             state: secureEnclaveAvailable ? .ready : .limited
         )
         #endif
+    }
+
+    private func postQuantumTransportCapability() -> AppleSecurityCapability {
+        AppleSecurityCapability(
+            id: .postQuantumTransport,
+            title: "Post-Quantum Transport",
+            shortValue: "TLS + X-Wing HPKE",
+            detail: "Numi's remote transport stays on Apple system TLS and its descriptor delivery path uses CryptoKit X-Wing HPKE for application-layer ciphertext sealing.",
+            recommendation: "Keep all discovery, relay, fee, and PIR networking on Apple networking stacks and avoid custom TLS.",
+            systemImage: "bolt.horizontal.shield.fill",
+            state: .ready
+        )
     }
 
     private func ownerAuthenticationCapability() -> AppleSecurityCapability {

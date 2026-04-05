@@ -9,8 +9,8 @@ private struct UnsignedReceiveDescriptorPayload: Codable {
     var createdAt: Date
     var expiresAt: Date
     var aliasHint: String?
-    var deliveryCurve25519PublicKey: Data
-    var taggingCurve25519PublicKey: Data
+    var deliveryPublicKey: Data
+    var taggingPublicKey: Data
     var offlineToken: Data
     var issuerIdentity: Data
 }
@@ -89,11 +89,7 @@ actor RootWalletVault {
         if let cachedProfile {
             return cachedProfile
         }
-        var profile = try await stateStore.load(deviceID: deviceID, role: role)
-        if try await migrateLegacyDayDescriptorSecretsIfNeeded(profile: &profile) {
-            try await persist(profile)
-            return profile
-        }
+        let profile = try await stateStore.load(deviceID: deviceID, role: role)
         cachedProfile = profile
         return profile
     }
@@ -201,13 +197,7 @@ actor RootWalletVault {
         }
 
         let key = try await keyManager.loadVaultWrappingKey(using: context)
-        var vault = try openVault(encryptedVault, with: key)
-        if try await migrateLegacyVaultDescriptorSecretsIfNeeded(vaultWallet: &vault) {
-            var migratedProfile = profile
-            unlockedVault = vault
-            unlockedVaultKey = key
-            try await persistVaultState(into: &migratedProfile, vaultWallet: vault)
-        }
+        let vault = try openVault(encryptedVault, with: key)
         unlockedVault = vault
         unlockedVaultKey = key
 
@@ -317,8 +307,8 @@ actor RootWalletVault {
             createdAt: descriptor.createdAt,
             expiresAt: descriptor.expiresAt,
             aliasHint: descriptor.aliasHint,
-            deliveryCurve25519PublicKey: descriptor.deliveryCurve25519PublicKey,
-            taggingCurve25519PublicKey: descriptor.taggingCurve25519PublicKey,
+            deliveryPublicKey: descriptor.deliveryPublicKey,
+            taggingPublicKey: descriptor.taggingPublicKey,
             offlineToken: descriptor.offlineToken,
             issuerIdentity: descriptor.issuerIdentity
         )
@@ -462,7 +452,7 @@ actor RootWalletVault {
             amount: draft.amount,
             memo: draft.memo,
             recipientDescriptorID: descriptor.id,
-            senderIntroductionPublicKey: tagPlan.introductionPublicKey,
+            senderIntroductionEncapsulatedKey: tagPlan.introductionEncapsulatedKey,
             createdAt: Date()
         )
         let recipientCiphertext = try codec.encryptRelayPayload(try JSONEncoder().encode(recipientPayload), to: descriptor)
@@ -513,9 +503,6 @@ actor RootWalletVault {
         } else if let encryptedVault = profile.encryptedVault {
             let key = try await keyManager.loadVaultWrappingKey(using: context)
             vaultWallet = try openVault(encryptedVault, with: key)
-            if try await migrateLegacyVaultDescriptorSecretsIfNeeded(vaultWallet: &vaultWallet) {
-                profile.encryptedVault = try sealVault(vaultWallet, with: key)
-            }
         } else {
             throw WalletError.walletNotInitialized
         }
@@ -800,10 +787,8 @@ actor RootWalletVault {
     }
 
     private func persist(_ profile: WalletProfile) async throws {
-        var normalizedProfile = profile
-        normalizedProfile.version = max(profile.version, 3)
-        cachedProfile = normalizedProfile
-        try await stateStore.save(normalizedProfile)
+        cachedProfile = profile
+        try await stateStore.save(profile)
     }
 
     private func persistVaultState(into profile: inout WalletProfile, vaultWallet: VaultWalletSnapshot) async throws {
@@ -819,8 +804,8 @@ actor RootWalletVault {
         aliasHint: String?,
         issuerIdentity: Data
     ) async throws -> DescriptorMaterial {
-        let deliveryKey = Curve25519.KeyAgreement.PrivateKey()
-        let taggingKey = Curve25519.KeyAgreement.PrivateKey()
+        let deliveryKey = try XWingMLKEM768X25519.PrivateKey()
+        let taggingKey = try XWingMLKEM768X25519.PrivateKey()
         let unsigned = UnsignedReceiveDescriptorPayload(
             id: UUID(),
             tier: tier,
@@ -828,8 +813,8 @@ actor RootWalletVault {
             createdAt: Date(),
             expiresAt: Date().addingTimeInterval(60 * 60 * 24),
             aliasHint: aliasHint,
-            deliveryCurve25519PublicKey: deliveryKey.publicKey.rawRepresentation,
-            taggingCurve25519PublicKey: taggingKey.publicKey.rawRepresentation,
+            deliveryPublicKey: deliveryKey.publicKey.rawRepresentation,
+            taggingPublicKey: taggingKey.publicKey.rawRepresentation,
             offlineToken: randomData(length: 32),
             issuerIdentity: issuerIdentity
         )
@@ -842,8 +827,8 @@ actor RootWalletVault {
             createdAt: unsigned.createdAt,
             expiresAt: unsigned.expiresAt,
             aliasHint: unsigned.aliasHint,
-            deliveryCurve25519PublicKey: unsigned.deliveryCurve25519PublicKey,
-            taggingCurve25519PublicKey: unsigned.taggingCurve25519PublicKey,
+            deliveryPublicKey: unsigned.deliveryPublicKey,
+            taggingPublicKey: unsigned.taggingPublicKey,
             offlineToken: unsigned.offlineToken,
             issuerIdentity: unsigned.issuerIdentity,
             signature: signature
@@ -851,8 +836,8 @@ actor RootWalletVault {
         return DescriptorMaterial(
             descriptor: descriptor,
             secrets: DescriptorPrivateMaterial(
-                deliveryKey: deliveryKey.rawRepresentation,
-                taggingKey: taggingKey.rawRepresentation
+                deliveryKey: deliveryKey.integrityCheckedRepresentation,
+                taggingKey: taggingKey.integrityCheckedRepresentation
             )
         )
     }
@@ -978,25 +963,5 @@ actor RootWalletVault {
         var tagging = material.taggingKey
         delivery.zeroize()
         tagging.zeroize()
-    }
-
-    private func migrateLegacyDayDescriptorSecretsIfNeeded(profile: inout WalletProfile) async throws -> Bool {
-        guard var dayWallet = profile.dayWallet else { return false }
-        let legacySecrets = dayWallet.consumeLegacyDescriptorPrivateKeys()
-        guard !legacySecrets.isEmpty else { return false }
-
-        let wrapped = legacySecrets.mapValues { DescriptorPrivateMaterial(deliveryKey: $0, taggingKey: Data()) }
-        try await descriptorSecretStore.importSecrets(wrapped, tier: .day)
-        profile.dayWallet = dayWallet
-        return true
-    }
-
-    private func migrateLegacyVaultDescriptorSecretsIfNeeded(vaultWallet: inout VaultWalletSnapshot) async throws -> Bool {
-        let legacySecrets = vaultWallet.consumeLegacyDescriptorPrivateKeys()
-        guard !legacySecrets.isEmpty else { return false }
-
-        let wrapped = legacySecrets.mapValues { DescriptorPrivateMaterial(deliveryKey: $0, taggingKey: Data()) }
-        try await descriptorSecretStore.importSecrets(wrapped, tier: .vault)
-        return true
     }
 }

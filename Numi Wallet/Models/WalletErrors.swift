@@ -55,7 +55,7 @@ enum WalletError: LocalizedError {
         case .descriptorVerificationFailed:
             return "The receive descriptor could not be verified."
         case .descriptorUpgradeRequired:
-            return "The wallet profile must rotate its receive descriptors before PIR and tag discovery can be enabled."
+            return "The receive descriptor is incomplete for Numi's sovereign transport and tag architecture."
         case .invalidRecoveryPackage:
             return "The recovery package is invalid or incomplete."
         case .invalidRecoveryTransfer:

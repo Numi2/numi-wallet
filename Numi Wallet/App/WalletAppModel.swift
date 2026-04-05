@@ -46,8 +46,8 @@ final class WalletAppModel: ObservableObject {
     private var peerTrustExpiryTask: Task<Void, Never>?
     private var hasStarted = false
 
-    init() {
-        let role = Self.defaultRole()
+    init(configuration: RemoteServiceConfiguration, role: DeviceRole? = nil) {
+        let role = role ?? Self.defaultRole()
         self.role = role
         self.dashboard = .placeholder(role: role)
 
@@ -59,7 +59,6 @@ final class WalletAppModel: ObservableObject {
         let appAttest = AppAttestProvider(keychain: keychain)
         let securityPostureClient = AppleSecurityPostureClient()
         let trustLedgerStore = TrustLedgerStore()
-        let configuration = RemoteServiceConfiguration.current()
         let deviceID = Self.deviceID()
         self.localDeviceID = deviceID
         self.configuration = configuration
@@ -104,6 +103,10 @@ final class WalletAppModel: ObservableObject {
         self.screenPrivacyMonitor = ScreenPrivacyMonitor { [weak self] event in
             self?.handleScreenPrivacyEvent(event)
         }
+    }
+
+    static func preview(role: DeviceRole = .authorityPhone) -> WalletAppModel {
+        WalletAppModel(configuration: .preview, role: role)
     }
 
     func start() {

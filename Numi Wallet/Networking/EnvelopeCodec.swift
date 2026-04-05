@@ -2,8 +2,8 @@ import CryptoKit
 import Foundation
 
 private struct RelayCiphertext: Codable {
-    var ephemeralPublicKey: Data
-    var combinedSealedBox: Data
+    var encapsulatedKey: Data
+    var ciphertext: Data
 }
 
 struct EnvelopeCodec: Sendable {
@@ -46,19 +46,16 @@ struct EnvelopeCodec: Sendable {
     }
 
     func encryptRelayPayload(_ plaintext: Data, to descriptor: PrivateReceiveDescriptor) throws -> Data {
-        let recipientKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: descriptor.deliveryCurve25519PublicKey)
-        let ephemeral = Curve25519.KeyAgreement.PrivateKey()
-        let secret = try ephemeral.sharedSecretFromKeyAgreement(with: recipientKey)
-        let symmetricKey = secret.hkdfDerivedSymmetricKey(
-            using: SHA256.self,
-            salt: descriptor.offlineToken,
-            sharedInfo: Data("numi.relay.e2ee".utf8),
-            outputByteCount: 32
+        let recipientKey = try XWingMLKEM768X25519.PublicKey(rawRepresentation: descriptor.deliveryPublicKey)
+        var sender = try HPKE.Sender(
+            recipientKey: recipientKey,
+            ciphersuite: .XWingMLKEM768X25519_SHA256_AES_GCM_256,
+            info: relayInfo(for: descriptor)
         )
-        let sealed = try ChaChaPoly.seal(plaintext, using: symmetricKey)
+        let sealed = try sender.seal(plaintext, authenticating: relayAssociatedData(for: descriptor))
         let ciphertext = RelayCiphertext(
-            ephemeralPublicKey: ephemeral.publicKey.rawRepresentation,
-            combinedSealedBox: sealed.combined
+            encapsulatedKey: sender.encapsulatedKey,
+            ciphertext: sealed
         )
         return try JSONEncoder().encode(ciphertext)
     }
@@ -68,23 +65,39 @@ struct EnvelopeCodec: Sendable {
         descriptorPrivateKey: Data,
         descriptor: PrivateReceiveDescriptor
     ) throws -> Data {
-        let privateKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: descriptorPrivateKey)
+        let privateKey = try XWingMLKEM768X25519.PrivateKey(integrityCheckedRepresentation: descriptorPrivateKey)
         let relayCiphertext = try JSONDecoder().decode(RelayCiphertext.self, from: ciphertext)
-        let ephemeralKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: relayCiphertext.ephemeralPublicKey)
-        let secret = try privateKey.sharedSecretFromKeyAgreement(with: ephemeralKey)
-        let symmetricKey = secret.hkdfDerivedSymmetricKey(
-            using: SHA256.self,
-            salt: descriptor.offlineToken,
-            sharedInfo: Data("numi.relay.e2ee".utf8),
-            outputByteCount: 32
+        var recipient = try HPKE.Recipient(
+            privateKey: privateKey,
+            ciphersuite: .XWingMLKEM768X25519_SHA256_AES_GCM_256,
+            info: relayInfo(for: descriptor),
+            encapsulatedKey: relayCiphertext.encapsulatedKey
         )
-        let sealedBox = try ChaChaPoly.SealedBox(combined: relayCiphertext.combinedSealedBox)
-        return try ChaChaPoly.open(sealedBox, using: symmetricKey)
+        return try recipient.open(
+            relayCiphertext.ciphertext,
+            authenticating: relayAssociatedData(for: descriptor)
+        )
     }
 
     private func releaseSlot(for date: Date) -> Date {
         let epoch = date.timeIntervalSince1970
         let bucket = floor(epoch / batchWindow) * batchWindow
         return Date(timeIntervalSince1970: bucket + batchWindow)
+    }
+
+    private func relayInfo(for descriptor: PrivateReceiveDescriptor) -> Data {
+        Data("numi.relay.hpke.xwing.\(descriptor.id.uuidString).\(descriptor.rotation).\(descriptor.tier.rawValue)".utf8)
+    }
+
+    private func relayAssociatedData(for descriptor: PrivateReceiveDescriptor) -> Data {
+        var payload = Data()
+        payload.append(descriptor.deliveryPublicKey)
+        payload.append(descriptor.taggingPublicKey)
+        payload.append(descriptor.offlineToken)
+        payload.append(descriptor.issuerIdentity)
+        payload.append(contentsOf: descriptor.id.uuidString.utf8)
+        payload.append(contentsOf: descriptor.tier.rawValue.utf8)
+        payload.append(contentsOf: String(descriptor.rotation).utf8)
+        return Data(SHA256.hash(data: payload))
     }
 }

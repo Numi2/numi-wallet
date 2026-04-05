@@ -4,6 +4,8 @@ Last updated: April 5, 2026
 
 See also:
 
+- [Numi Future Of Crypto Roadmap](NUMI_FUTURE_OF_CRYPTO_ROADMAP.md)
+- [Numi Tachyon Execution Guide](NUMI_TACHYON_EXECUTION_GUIDE.md)
 - [Numi Architecture And Roadmap](NUMI_ARCHITECTURE_AND_ROADMAP.md)
 - [Numi Apple Ecosystem Design Roadmap](NUMI_APPLE_ECOSYSTEM_DESIGN_ROADMAP.md)
 
@@ -16,7 +18,7 @@ This document is the current execution brief for Numi Wallet as an Apple-only so
 - the code changes made in the current development pass
 - the recommended roadmap from prototype shell to state-of-the-art shipping product
 
-This is not a generic backlog. It is the intended path for a privacy-first, post-quantum-forward wallet that uses Apple hardware and APIs as part of its security model.
+This is not a generic backlog. It is the intended path for a privacy-first, post-quantum wallet that uses Apple hardware and APIs as part of its security model.
 
 ## Apple Platform Anchors
 
@@ -29,12 +31,9 @@ These Apple references should actively shape Numi, not sit as passive links in a
   - <https://developer.apple.com/design/human-interface-guidelines>
   - <https://developer.apple.com/documentation/technologyoverviews/liquid-glass>
   - Liquid Glass should clarify hierarchy and interaction state. It is structural, not decorative.
-- LocalAuthenticationView
-  - <https://developer.apple.com/documentation/localauthentication/localauthenticationview>
-  - SwiftUI-native authentication surfaces should be used for high-trust moments where possible, instead of custom fake biometric chrome.
 - Local Authentication
   - <https://developer.apple.com/documentation/localauthentication/>
-  - Numi should keep device-owner authentication explicit and system-native.
+  - Numi should keep device-owner authentication explicit and system-native. The installed iOS 26.4 public SDK does not expose `LocalAuthenticationView`, so iPhone auth should stay on `LAContext`, Keychain access control, and system sheets.
 - App Attest
   - <https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server>
   - Remote services should verify that the client is a real Apple app instance and reject replay, abuse, and downgrade paths.
@@ -48,6 +47,9 @@ These Apple references should actively shape Numi, not sit as passive links in a
   - <https://developer.apple.com/documentation/cryptokit/enhancing-your-app-s-privacy-and-security-with-quantum-secure-workflows>
   - <https://developer.apple.com/videos/play/wwdc2025/314/>
   - Apple’s guidance is to adopt quantum-secure cryptography now, especially for data that must remain secure in the future, and to use hybrid approaches where a full switch is not yet appropriate.
+- Quantum-secure TLS
+  - <https://developer.apple.com/documentation/network/preparing-your-network-for-quantum-secure-encryption-in-tls>
+  - Numi should keep all remote traffic on Apple system TLS and avoid a custom transport stack.
 - Nearby Interaction
   - <https://developer.apple.com/nearby-interaction/>
   - <https://developer.apple.com/documentation/nearbyinteraction/ninearbypeerconfiguration>
@@ -70,7 +72,7 @@ Apple’s guidance implies several product decisions that should be treated as s
 
 The codebase already contains several strong foundations:
 
-- Secure Enclave-backed authority key management, with simulator fallback.
+- Secure Enclave-backed `MLDSA87` authority and peer identity management.
 - Device-only keychain storage for vault wrapping material, spend authorization, descriptor secrets, ratchet secrets, and App Attest key IDs.
 - Authority/day/vault wallet split with policy-gated vault visibility.
 - App Attest-aware networking clients.
@@ -78,6 +80,17 @@ The codebase already contains several strong foundations:
 - PIR and shielded-state plumbing behind capability gates.
 - Dynamic-fee and proving prototypes.
 - Privacy lifecycle handling for capture, screenshots, backgrounding, and protected-data loss.
+
+## Locked Cryptography Decisions
+
+These decisions should now be treated as architectural defaults, not experiments:
+
+1. Long-lived authority and peer identity stay on `SecureEnclave.MLDSA87`.
+2. Fee-market authorization hotkeys use `MLDSA87`.
+3. Descriptor delivery encryption uses `HPKE.XWingMLKEM768X25519_SHA256_AES_GCM_256`.
+4. Tag-ratchet relationship bootstrap uses `XWingMLKEM768X25519` encapsulation, not `Curve25519` Diffie-Hellman.
+5. Remote networking stays on Apple system TLS plus App Attest. Numi does not ship a custom TLS stack.
+6. Numi does not maintain simulator or legacy-state crypto fallbacks in the authority architecture.
 
 These are not superficial features. They are the beginnings of the correct architecture.
 
@@ -254,7 +267,7 @@ Why this matters:
 Important Apple SDK note:
 
 - Apple documentation references `LocalAuthenticationView`, but the installed iOS 26.4 public SDK used for this pass does not expose that symbol in the public Swift module.
-- Numi therefore uses the best public fallback: a first-class SwiftUI approval surface that drives `LAContext` directly and reuses that approval for the actual protected operation.
+- Numi therefore treats `LAContext` plus Keychain access control as the canonical iPhone authentication architecture, with SwiftUI only framing the trust moment before the system sheet appears.
 
 Files:
 
@@ -344,7 +357,7 @@ Target: next major implementation cycle
 1. Replace remaining raw recovery text handling with bounded transfer surfaces.
    - Prefer authenticated local transfer between Apple devices.
    - The text editor should become a last-resort debug bridge, not a normal product flow.
-2. Introduce `LocalAuthenticationView` where the UX benefits from a first-class SwiftUI auth surface.
+2. Keep iPhone privileged entry points on `LAContext` and Keychain-gated system sheets.
    - Vault chamber entry.
    - Recovery import and export approval.
    - Panic or destructive custody actions where appropriate.
@@ -401,12 +414,12 @@ Target: next major implementation cycle
    - receive model viability
    - metadata leak profile
    - fee fingerprinting risk
-   - relay and discovery compatibility
+   - relay and discovery fit
 
 ### Phase E: Complete Post-Quantum Product Integrity
 
 1. Keep long-lived signing and identity on Apple-supported quantum-secure primitives.
-2. Introduce hybrid PQ transport or HPKE where the remote protocol requires confidentiality with long future secrecy horizons.
+2. Keep application-layer confidentiality on Apple HPKE and remote transport on Apple system TLS wherever the protocol requires long future secrecy horizons.
 3. Separate:
    - long-lived authority identity
    - short-lived transport credentials
@@ -418,7 +431,7 @@ Target: next major implementation cycle
    - lifetime
    - rotation trigger
    - Apple API or library source
-   - migration plan
+   - replacement policy
 
 ## Immediate Code Priorities
 
@@ -428,8 +441,8 @@ These should be the next implementation decisions, in order:
 2. Layer real `NearbyInteraction` session management and precision evidence onto the peer-trust session model.
 3. Refactor the UI into role-specific root views.
 4. Add trust records, peer administration, and revocation surfaces.
-5. Move biometric entry points toward `LocalAuthenticationView` where it improves the experience.
-6. Add a signed coin manifest model and stop treating Info.plist as the final runtime authority for coin capabilities.
+5. Keep biometric entry points on `LAContext` and Keychain-gated system sheets, with SwiftUI only framing the trust state before system authentication.
+6. Signed coin manifest is now the runtime authority for coin capabilities and service topology. Keep it pinned to a bundled ML-DSA-87 trust root and regenerate it only through the offline signing path.
 7. Split proving, remote-service policy, and coin-capability policy into clearer subsystems.
 
 ## Recommended Codebase Shape

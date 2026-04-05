@@ -128,8 +128,8 @@ struct PrivateReceiveDescriptor: Codable, Identifiable, Hashable, Sendable {
     var createdAt: Date
     var expiresAt: Date
     var aliasHint: String?
-    var deliveryCurve25519PublicKey: Data
-    var taggingCurve25519PublicKey: Data
+    var deliveryPublicKey: Data
+    var taggingPublicKey: Data
     var offlineToken: Data
     var issuerIdentity: Data
     var signature: Data
@@ -141,8 +141,8 @@ struct PrivateReceiveDescriptor: Codable, Identifiable, Hashable, Sendable {
         case createdAt
         case expiresAt
         case aliasHint
-        case deliveryCurve25519PublicKey
-        case taggingCurve25519PublicKey
+        case deliveryPublicKey
+        case taggingPublicKey
         case offlineToken
         case issuerIdentity
         case signature
@@ -155,8 +155,8 @@ struct PrivateReceiveDescriptor: Codable, Identifiable, Hashable, Sendable {
         createdAt: Date,
         expiresAt: Date,
         aliasHint: String?,
-        deliveryCurve25519PublicKey: Data,
-        taggingCurve25519PublicKey: Data,
+        deliveryPublicKey: Data,
+        taggingPublicKey: Data,
         offlineToken: Data,
         issuerIdentity: Data,
         signature: Data
@@ -167,8 +167,8 @@ struct PrivateReceiveDescriptor: Codable, Identifiable, Hashable, Sendable {
         self.createdAt = createdAt
         self.expiresAt = expiresAt
         self.aliasHint = aliasHint
-        self.deliveryCurve25519PublicKey = deliveryCurve25519PublicKey
-        self.taggingCurve25519PublicKey = taggingCurve25519PublicKey
+        self.deliveryPublicKey = deliveryPublicKey
+        self.taggingPublicKey = taggingPublicKey
         self.offlineToken = offlineToken
         self.issuerIdentity = issuerIdentity
         self.signature = signature
@@ -183,12 +183,27 @@ struct PrivateReceiveDescriptor: Codable, Identifiable, Hashable, Sendable {
             createdAt: try container.decode(Date.self, forKey: .createdAt),
             expiresAt: try container.decode(Date.self, forKey: .expiresAt),
             aliasHint: try container.decodeIfPresent(String.self, forKey: .aliasHint),
-            deliveryCurve25519PublicKey: try container.decode(Data.self, forKey: .deliveryCurve25519PublicKey),
-            taggingCurve25519PublicKey: try container.decodeIfPresent(Data.self, forKey: .taggingCurve25519PublicKey) ?? Data(),
+            deliveryPublicKey: try container.decode(Data.self, forKey: .deliveryPublicKey),
+            taggingPublicKey: try container.decode(Data.self, forKey: .taggingPublicKey),
             offlineToken: try container.decode(Data.self, forKey: .offlineToken),
             issuerIdentity: try container.decode(Data.self, forKey: .issuerIdentity),
             signature: try container.decode(Data.self, forKey: .signature)
         )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(tier, forKey: .tier)
+        try container.encode(rotation, forKey: .rotation)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(expiresAt, forKey: .expiresAt)
+        try container.encodeIfPresent(aliasHint, forKey: .aliasHint)
+        try container.encode(deliveryPublicKey, forKey: .deliveryPublicKey)
+        try container.encode(taggingPublicKey, forKey: .taggingPublicKey)
+        try container.encode(offlineToken, forKey: .offlineToken)
+        try container.encode(issuerIdentity, forKey: .issuerIdentity)
+        try container.encode(signature, forKey: .signature)
     }
 
     var fingerprint: String {
@@ -203,24 +218,13 @@ struct DayWalletSnapshot: Codable, Sendable {
     var activeDescriptor: PrivateReceiveDescriptor?
     var pendingNotes: [ShieldedNoteSummary]
     var descriptorKeyIDs: [UUID]
-    var legacyDescriptorPrivateKeys: [UUID: Data]?
-
-    private enum CodingKeys: String, CodingKey {
-        case balance
-        case alias
-        case activeDescriptor
-        case pendingNotes
-        case descriptorKeyIDs
-        case descriptorPrivateKeys
-    }
 
     static let empty = DayWalletSnapshot(
         balance: .zero,
         alias: nil,
         activeDescriptor: nil,
         pendingNotes: [],
-        descriptorKeyIDs: [],
-        legacyDescriptorPrivateKeys: nil
+        descriptorKeyIDs: []
     )
 
     mutating func registerDescriptorKey(_ descriptorID: UUID) {
@@ -229,54 +233,18 @@ struct DayWalletSnapshot: Codable, Sendable {
         }
     }
 
-    mutating func consumeLegacyDescriptorPrivateKeys() -> [UUID: Data] {
-        let secrets = legacyDescriptorPrivateKeys ?? [:]
-        for descriptorID in secrets.keys where !descriptorKeyIDs.contains(descriptorID) {
-            descriptorKeyIDs.append(descriptorID)
-        }
-        legacyDescriptorPrivateKeys = nil
-        return secrets
-    }
-
     init(
         balance: MoneyAmount,
         alias: String?,
         activeDescriptor: PrivateReceiveDescriptor?,
         pendingNotes: [ShieldedNoteSummary],
-        descriptorKeyIDs: [UUID],
-        legacyDescriptorPrivateKeys: [UUID: Data]? = nil
+        descriptorKeyIDs: [UUID]
     ) {
         self.balance = balance
         self.alias = alias
         self.activeDescriptor = activeDescriptor
         self.pendingNotes = pendingNotes
         self.descriptorKeyIDs = descriptorKeyIDs
-        self.legacyDescriptorPrivateKeys = legacyDescriptorPrivateKeys
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let legacyDescriptorPrivateKeys = try container.decodeIfPresent([UUID: Data].self, forKey: .descriptorPrivateKeys)
-        let descriptorKeyIDs = try container.decodeIfPresent([UUID].self, forKey: .descriptorKeyIDs)
-            ?? Array((legacyDescriptorPrivateKeys ?? [:]).keys)
-
-        self.init(
-            balance: try container.decode(MoneyAmount.self, forKey: .balance),
-            alias: try container.decodeIfPresent(String.self, forKey: .alias),
-            activeDescriptor: try container.decodeIfPresent(PrivateReceiveDescriptor.self, forKey: .activeDescriptor),
-            pendingNotes: try container.decodeIfPresent([ShieldedNoteSummary].self, forKey: .pendingNotes) ?? [],
-            descriptorKeyIDs: descriptorKeyIDs,
-            legacyDescriptorPrivateKeys: legacyDescriptorPrivateKeys
-        )
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(balance, forKey: .balance)
-        try container.encodeIfPresent(alias, forKey: .alias)
-        try container.encodeIfPresent(activeDescriptor, forKey: .activeDescriptor)
-        try container.encode(pendingNotes, forKey: .pendingNotes)
-        try container.encode(descriptorKeyIDs, forKey: .descriptorKeyIDs)
     }
 }
 
@@ -286,24 +254,13 @@ struct VaultWalletSnapshot: Codable, Sendable {
     var notes: [ShieldedNoteSummary]
     var descriptorKeyIDs: [UUID]
     var lastUnlockedAt: Date?
-    var legacyDescriptorPrivateKeys: [UUID: Data]?
-
-    private enum CodingKeys: String, CodingKey {
-        case balance
-        case activeDescriptor
-        case notes
-        case descriptorKeyIDs
-        case descriptorPrivateKeys
-        case lastUnlockedAt
-    }
 
     static let empty = VaultWalletSnapshot(
         balance: .zero,
         activeDescriptor: nil,
         notes: [],
         descriptorKeyIDs: [],
-        lastUnlockedAt: nil,
-        legacyDescriptorPrivateKeys: nil
+        lastUnlockedAt: nil
     )
 
     mutating func registerDescriptorKey(_ descriptorID: UUID) {
@@ -312,54 +269,18 @@ struct VaultWalletSnapshot: Codable, Sendable {
         }
     }
 
-    mutating func consumeLegacyDescriptorPrivateKeys() -> [UUID: Data] {
-        let secrets = legacyDescriptorPrivateKeys ?? [:]
-        for descriptorID in secrets.keys where !descriptorKeyIDs.contains(descriptorID) {
-            descriptorKeyIDs.append(descriptorID)
-        }
-        legacyDescriptorPrivateKeys = nil
-        return secrets
-    }
-
     init(
         balance: MoneyAmount,
         activeDescriptor: PrivateReceiveDescriptor?,
         notes: [ShieldedNoteSummary],
         descriptorKeyIDs: [UUID],
-        lastUnlockedAt: Date?,
-        legacyDescriptorPrivateKeys: [UUID: Data]? = nil
+        lastUnlockedAt: Date?
     ) {
         self.balance = balance
         self.activeDescriptor = activeDescriptor
         self.notes = notes
         self.descriptorKeyIDs = descriptorKeyIDs
         self.lastUnlockedAt = lastUnlockedAt
-        self.legacyDescriptorPrivateKeys = legacyDescriptorPrivateKeys
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let legacyDescriptorPrivateKeys = try container.decodeIfPresent([UUID: Data].self, forKey: .descriptorPrivateKeys)
-        let descriptorKeyIDs = try container.decodeIfPresent([UUID].self, forKey: .descriptorKeyIDs)
-            ?? Array((legacyDescriptorPrivateKeys ?? [:]).keys)
-
-        self.init(
-            balance: try container.decode(MoneyAmount.self, forKey: .balance),
-            activeDescriptor: try container.decodeIfPresent(PrivateReceiveDescriptor.self, forKey: .activeDescriptor),
-            notes: try container.decodeIfPresent([ShieldedNoteSummary].self, forKey: .notes) ?? [],
-            descriptorKeyIDs: descriptorKeyIDs,
-            lastUnlockedAt: try container.decodeIfPresent(Date.self, forKey: .lastUnlockedAt),
-            legacyDescriptorPrivateKeys: legacyDescriptorPrivateKeys
-        )
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(balance, forKey: .balance)
-        try container.encodeIfPresent(activeDescriptor, forKey: .activeDescriptor)
-        try container.encode(notes, forKey: .notes)
-        try container.encode(descriptorKeyIDs, forKey: .descriptorKeyIDs)
-        try container.encodeIfPresent(lastUnlockedAt, forKey: .lastUnlockedAt)
     }
 }
 
@@ -448,7 +369,6 @@ struct WalletProfile: Codable, Sendable {
         case peers
         case recoveryPackage
         case recoveryPeers
-        case recoveryShares
         case shielded
         case lastDayUnlockAt
         case lastVaultUnlockAt
@@ -457,7 +377,7 @@ struct WalletProfile: Codable, Sendable {
 
     static func empty(deviceID: String, role: DeviceRole) -> WalletProfile {
         WalletProfile(
-            version: 3,
+            version: 1,
             deviceID: deviceID,
             role: role,
             createdAt: Date(),
@@ -514,11 +434,9 @@ struct WalletProfile: Codable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let legacyShares = try container.decodeIfPresent([RecoveryShareEnvelope].self, forKey: .recoveryShares) ?? []
-        let decodedRecoveryPeers = try container.decodeIfPresent([RecoveryPeerRecord].self, forKey: .recoveryPeers)
 
         self.init(
-            version: try container.decodeIfPresent(Int.self, forKey: .version) ?? 1,
+            version: try container.decode(Int.self, forKey: .version),
             deviceID: try container.decode(String.self, forKey: .deviceID),
             role: try container.decode(DeviceRole.self, forKey: .role),
             createdAt: try container.decode(Date.self, forKey: .createdAt),
@@ -529,16 +447,7 @@ struct WalletProfile: Codable, Sendable {
             policy: try container.decode(PolicySnapshot.self, forKey: .policy),
             peers: try container.decodeIfPresent([PairedPeer].self, forKey: .peers) ?? [],
             recoveryPackage: try container.decodeIfPresent(RecoveryPackage.self, forKey: .recoveryPackage),
-            recoveryPeers: decodedRecoveryPeers ?? legacyShares.map {
-                RecoveryPeerRecord(
-                    id: $0.id,
-                    peerName: $0.peerName,
-                    peerKind: $0.peerKind,
-                    deviceID: $0.deviceID,
-                    rootKeyDigest: $0.rootKeyDigest,
-                    createdAt: $0.createdAt
-                )
-            },
+            recoveryPeers: try container.decodeIfPresent([RecoveryPeerRecord].self, forKey: .recoveryPeers) ?? [],
             shielded: try container.decodeIfPresent(ShieldedWalletSnapshot.self, forKey: .shielded) ?? .empty,
             lastDayUnlockAt: try container.decodeIfPresent(Date.self, forKey: .lastDayUnlockAt),
             lastVaultUnlockAt: try container.decodeIfPresent(Date.self, forKey: .lastVaultUnlockAt),
@@ -686,27 +595,59 @@ struct RemoteServiceConfiguration: Sendable {
     var supportsBackgroundPIRRefresh: Bool {
         supportsPIRStateUpdates && pirURL != nil
     }
+}
 
-    static func current(bundle: Bundle = .main) -> RemoteServiceConfiguration {
-        RemoteServiceConfiguration(
-            network: WalletNetwork(rawValue: bundle.object(forInfoDictionaryKey: "NUMI_NETWORK") as? String ?? "") ?? .mainnet,
-            capabilities: CoinProtocolCapabilities(
-                aliasDiscovery: bundle.bool(forInfoDictionaryKey: "NUMI_ENABLE_ALIAS_DISCOVERY", default: false),
-                pirStateUpdates: bundle.bool(forInfoDictionaryKey: "NUMI_ENABLE_PIR_STATE_UPDATES", default: false),
-                tagRatchets: bundle.bool(forInfoDictionaryKey: "NUMI_ENABLE_TAG_RATCHETS", default: false),
-                dynamicFeeMarkets: bundle.bool(forInfoDictionaryKey: "NUMI_ENABLE_DYNAMIC_FEES", default: false),
-                relaySubmission: bundle.bool(forInfoDictionaryKey: "NUMI_ENABLE_RELAY_SUBMISSION", default: false)
-            ),
-            discoveryURL: bundle.url(forInfoDictionaryKey: "NUMI_DISCOVERY_URL"),
-            pirURL: bundle.url(forInfoDictionaryKey: "NUMI_PIR_URL"),
-            feeOracleURL: bundle.url(forInfoDictionaryKey: "NUMI_FEE_ORACLE_URL"),
-            relayIngressURL: bundle.url(forInfoDictionaryKey: "NUMI_RELAY_INGRESS_URL"),
-            relayEgressURL: bundle.url(forInfoDictionaryKey: "NUMI_RELAY_EGRESS_URL"),
-            fixedEnvelopeSize: bundle.integer(forInfoDictionaryKey: "NUMI_CONTROL_ENVELOPE_BYTES", default: 4096),
-            pirEnvelopeSize: bundle.integer(forInfoDictionaryKey: "NUMI_PIR_ENVELOPE_BYTES", default: 1_048_576),
-            batchWindow: bundle.double(forInfoDictionaryKey: "NUMI_BATCH_WINDOW_SECONDS", default: 30)
+extension RemoteServiceConfiguration {
+    init(validatedManifest manifest: CoinManifestPayload) throws {
+        guard manifest.transport.controlEnvelopeBytes >= 1024 else {
+            throw CoinManifestError.invalidTransportPolicy("Control envelope budget must be at least 1024 bytes.")
+        }
+        guard manifest.transport.pirEnvelopeBytes >= manifest.transport.controlEnvelopeBytes else {
+            throw CoinManifestError.invalidTransportPolicy("PIR envelope budget must be greater than or equal to the control envelope budget.")
+        }
+        guard manifest.transport.batchWindowSeconds > 0 else {
+            throw CoinManifestError.invalidTransportPolicy("Batch window must be greater than zero seconds.")
+        }
+        if manifest.capabilities.aliasDiscovery, manifest.services.discovery == nil {
+            throw CoinManifestError.invalidServiceTopology("Alias discovery requires a discovery service URL.")
+        }
+        if manifest.capabilities.pirStateUpdates, manifest.services.pir == nil {
+            throw CoinManifestError.invalidServiceTopology("PIR state updates require a PIR service URL.")
+        }
+        if manifest.capabilities.dynamicFeeMarkets, manifest.services.feeOracle == nil {
+            throw CoinManifestError.invalidServiceTopology("Dynamic fee markets require a fee-oracle URL.")
+        }
+        if manifest.capabilities.relaySubmission,
+           manifest.services.relayIngress == nil || manifest.services.relayEgress == nil {
+            throw CoinManifestError.invalidServiceTopology("Relay submission requires both relay ingress and relay egress URLs.")
+        }
+
+        self = RemoteServiceConfiguration(
+            network: manifest.network,
+            capabilities: manifest.capabilities,
+            discoveryURL: manifest.services.discovery,
+            pirURL: manifest.services.pir,
+            feeOracleURL: manifest.services.feeOracle,
+            relayIngressURL: manifest.services.relayIngress,
+            relayEgressURL: manifest.services.relayEgress,
+            fixedEnvelopeSize: manifest.transport.controlEnvelopeBytes,
+            pirEnvelopeSize: manifest.transport.pirEnvelopeBytes,
+            batchWindow: manifest.transport.batchWindowSeconds
         )
     }
+
+    static let preview = RemoteServiceConfiguration(
+        network: .mainnet,
+        capabilities: .base,
+        discoveryURL: nil,
+        pirURL: nil,
+        feeOracleURL: nil,
+        relayIngressURL: nil,
+        relayEgressURL: nil,
+        fixedEnvelopeSize: 4096,
+        pirEnvelopeSize: 1_048_576,
+        batchWindow: 30
+    )
 }
 
 struct PairingInvitation: Codable, Sendable {

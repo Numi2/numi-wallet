@@ -81,7 +81,7 @@ struct TagRelationshipSnapshot: Codable, Identifiable, Hashable, Sendable {
     var alias: String?
     var peerDescriptorID: UUID
     var peerTaggingPublicKey: Data
-    var introductionPublicKey: Data?
+    var introductionEncapsulatedKey: Data?
     var direction: TagRelationshipDirection
     var nextOutgoingCounter: UInt64
     var nextIncomingCounter: UInt64
@@ -178,7 +178,7 @@ struct ShieldedRecipientPayload: Codable, Sendable {
     var amount: MoneyAmount
     var memo: String
     var recipientDescriptorID: UUID
-    var senderIntroductionPublicKey: Data?
+    var senderIntroductionEncapsulatedKey: Data?
     var createdAt: Date
 }
 
@@ -239,7 +239,7 @@ struct TaggedPaymentMatch: Codable, Sendable {
     var tag: Data
     var recipientDescriptorID: UUID
     var noteCiphertext: Data
-    var senderIntroductionPublicKey: Data?
+    var senderIntroductionEncapsulatedKey: Data?
     var receivedAt: Date
 }
 

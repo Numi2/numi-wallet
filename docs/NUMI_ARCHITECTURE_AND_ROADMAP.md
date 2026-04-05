@@ -4,6 +4,8 @@ Last updated: April 5, 2026
 
 See also:
 
+- [Numi Future Of Crypto Roadmap](NUMI_FUTURE_OF_CRYPTO_ROADMAP.md)
+- [Numi Tachyon Execution Guide](NUMI_TACHYON_EXECUTION_GUIDE.md)
 - [Numi Apple Ecosystem Design Roadmap](NUMI_APPLE_ECOSYSTEM_DESIGN_ROADMAP.md)
 - [Numi State Of The Art Apple Plan](NUMI_STATE_OF_THE_ART_APPLE_PLAN.md)
 
@@ -69,7 +71,7 @@ Numi should feel like a sovereign instrument, not a finance dashboard.
 
 ### Protocol Doctrine
 
-- Numi should support only coins whose architecture can be made compatible with a sovereign, privacy-preserving, post-quantum-forward wallet model.
+- Numi should support only coins whose architecture can be made compatible with a sovereign, privacy-preserving, post-quantum wallet model.
 - Address reuse, transparent account graphs, public counterparties, or fee flows that unavoidably fingerprint the user should be treated as design debt.
 - Coin-specific features belong behind capability flags and protocol adapters, not in the app shell.
 - If a coin supports PIR state refresh, tag ratchets, hidden-fee commitments, or blinded discovery, Numi should expose that cleanly.
@@ -91,9 +93,10 @@ Numi should lean into Apple’s native stack rather than abstracting away from i
 Apple references relevant to the current direction:
 
 - [Local Authentication](https://developer.apple.com/documentation/localauthentication/)
-- [LocalAuthenticationView](https://developer.apple.com/documentation/localauthentication/localauthenticationview)
+- `LocalAuthenticationView` is not present in the installed iOS 26.4 public SDK, so iPhone authentication should stay on `LAContext`, Keychain access control, and system sheets rather than a non-existent SwiftUI wrapper.
 - [Validating apps that connect to your server](https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server)
 - [URLSessionConfiguration.ephemeral](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/ephemeral)
+- [Prepare your network for quantum-secure encryption in TLS](https://developer.apple.com/documentation/network/preparing-your-network-for-quantum-secure-encryption-in-tls)
 - [applicationProtectedDataWillBecomeUnavailable(_:)](https://developer.apple.com/documentation/uikit/uiapplicationdelegate/applicationprotecteddatawillbecomeunavailable%28_%3A%29)
 - [UIScene.didEnterBackgroundNotification](https://developer.apple.com/documentation/uikit/uiscene/didenterbackgroundnotification)
 - [Privacy in the Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/privacy)
@@ -130,16 +133,17 @@ Instead, these are modeled as explicit protocol capabilities in the runtime conf
 
 This is the right design because Numi is meant for the future of sovereign crypto, not for one protocol snapshot frozen in time.
 
-### 3. PQ Safety With Practical Hybrid Boundaries
+### 3. Unified Apple PQ Cryptography
 
-The codebase currently uses Apple’s post-quantum signature support for authority and fee-hotkey signing, while still using practical transport and key-agreement patterns appropriate to the current iOS stack.
+The architecture is no longer “post-quantum-forward.” It now has a single Apple-native cryptographic line:
 
-The product stance is:
+- `SecureEnclave.MLDSA87` for long-lived authority and peer identity signing.
+- `MLDSA87` for fee-market authorization hotkeys.
+- `HPKE.XWingMLKEM768X25519_SHA256_AES_GCM_256` for descriptor delivery ciphertexts.
+- `XWingMLKEM768X25519` encapsulation for relationship bootstrap in tag-ratchet setup.
+- Apple system TLS for all remote networking, with no custom TLS stack in Numi.
 
-- prefer post-quantum-safe primitives for long-lived signing and identity where Apple supports them well
-- use Apple-native secure storage for long-lived keys
-- avoid inventing custom cryptographic primitives when Apple already provides a safe and reviewed path
-- keep network and coin adapters flexible enough to adopt stronger post-quantum transport patterns as supported rails mature
+This is the right boundary because Apple’s public stack now gives Numi a reviewed, coherent path for long-lived signatures, application-layer ciphertext sealing, and transport confidentiality without inventing wallet-specific cryptography.
 
 ### 4. Privacy Features Must Improve UX, Not Just Protocol Purity
 
@@ -159,7 +163,7 @@ The current repo is a prototype shell with meaningful security structure already
 ### Implemented
 
 - Authority/day/vault split with policy-gated vault visibility and spend.
-- Secure Enclave-backed authority and peer signing keys, with simulator fallback.
+- Secure Enclave-backed `MLDSA87` authority and peer signing keys.
 - Device-only vault wrapping key and spend approval token in the keychain.
 - Role-scoped and device-scoped canonical wallet state files.
 - State integrity sealing to reject tampered wallet state.
@@ -168,14 +172,14 @@ The current repo is a prototype shell with meaningful security structure already
 - Sealed local trust-ledger persistence for peer records and signed recovery-transfer audit history.
 - App Attest-aware discovery and relay clients.
 - Ephemeral URL session configuration for remote traffic.
+- `XWing` HPKE relay payload encryption for descriptor delivery.
 - Privacy shield and runtime response to capture, screenshots, and protected-data loss.
-- Runtime Apple security posture telemetry for Secure Enclave, owner authentication, App Attest, Nearby Interaction, local-state hardening, and privacy-boundary readiness.
-- Key migration of descriptor private keys out of serialized wallet state into device-only keychain storage.
+- Runtime Apple security posture telemetry for Secure Enclave, post-quantum transport, owner authentication, App Attest, Nearby Interaction, local-state hardening, and privacy-boundary readiness.
 - Local-only recovery shares stored on peers under biometry/passcode protection.
 - Capability-gated protocol configuration so advanced privacy features are opt-in per coin profile.
 - Shielded wallet state model for note witnesses, PIR sync status, fee posture, and tag-relationship tracking.
 - PIR client wiring for Merkle path refresh, nullifier checks, and tag lookup.
-- Shared-secret tag-ratchet engine plus device-only ratchet secret storage.
+- `XWing`-bootstrapped tag-ratchet engine plus device-only ratchet secret storage.
 - Dynamic-fee authorization path with fee commitment and authorized hotkey bundle construction.
 - Background-refresh wiring for PIR-enabled coins on iOS.
 
@@ -187,8 +191,8 @@ The current repo is a prototype shell with meaningful security structure already
 - Metal-backed proving prototype.
 - Recovery package generation and re-enrollment.
 - Discovery and relay envelope padding and attestation attachment.
-- Shielded send pipeline that now depends on real remote services instead of prototype local fallbacks.
-- Coin capability model that is runtime-ready but still configured through Info.plist rather than a richer signed coin manifest.
+- Shielded send pipeline that now depends on real remote services instead of local prototype shortcuts.
+- Signed coin manifest that now pins runtime capability topology and service authority in the application bundle.
 
 ### Not Yet Implemented
 

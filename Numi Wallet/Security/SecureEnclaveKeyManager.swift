@@ -5,8 +5,7 @@ import Security
 
 private struct StoredSigningKeyReference: Codable, Sendable {
     enum Kind: String, Codable, Sendable {
-        case secureEnclaveMLDSA65
-        case softwareMLDSA65
+        case secureEnclaveMLDSA87
     }
 
     var kind: Kind
@@ -46,12 +45,12 @@ actor SecureEnclaveKeyManager {
     }
 
     func verifyAuthoritySignature(signature: Data, payload: Data, publicKey: Data) throws -> Bool {
-        let key = try MLDSA65.PublicKey(rawRepresentation: publicKey)
+        let key = try MLDSA87.PublicKey(rawRepresentation: publicKey)
         return key.isValidSignature(signature, for: payload)
     }
 
     func verifyPeerSignature(signature: Data, payload: Data, publicKey: Data) throws -> Bool {
-        let key = try MLDSA65.PublicKey(rawRepresentation: publicKey)
+        let key = try MLDSA87.PublicKey(rawRepresentation: publicKey)
         return key.isValidSignature(signature, for: payload)
     }
 
@@ -160,44 +159,24 @@ private struct AnySigningKey: Sendable {
     }
 
     static func makeBestAvailable() throws -> AnySigningKey {
-        do {
-            let accessControl = try secureEnclaveAccessControl()
-            let key = try SecureEnclave.MLDSA65.PrivateKey(accessControl: accessControl, authenticationContext: LAContext())
-            return AnySigningKey(
-                boxed: .secureEnclave(key),
-                storedReference: StoredSigningKeyReference(kind: .secureEnclaveMLDSA65, data: key.dataRepresentation),
-                publicKey: key.publicKey.rawRepresentation
-            )
-        } catch {
-            #if targetEnvironment(simulator)
-            let key = try MLDSA65.PrivateKey()
-            return AnySigningKey(
-                boxed: .software(key),
-                storedReference: StoredSigningKeyReference(kind: .softwareMLDSA65, data: key.integrityCheckedRepresentation),
-                publicKey: key.publicKey.rawRepresentation
-            )
-            #else
-            throw error
-            #endif
-        }
+        let accessControl = try secureEnclaveAccessControl()
+        let key = try SecureEnclave.MLDSA87.PrivateKey(accessControl: accessControl, authenticationContext: LAContext())
+        return AnySigningKey(
+            boxed: .secureEnclave(key),
+            storedReference: StoredSigningKeyReference(kind: .secureEnclaveMLDSA87, data: key.dataRepresentation),
+            publicKey: key.publicKey.rawRepresentation
+        )
     }
 
     init(stored: StoredSigningKeyReference) throws {
         switch stored.kind {
-        case .secureEnclaveMLDSA65:
-            let key = try SecureEnclave.MLDSA65.PrivateKey(
+        case .secureEnclaveMLDSA87:
+            let key = try SecureEnclave.MLDSA87.PrivateKey(
                 dataRepresentation: stored.data,
                 authenticationContext: LAContext()
             )
             self.init(
                 boxed: .secureEnclave(key),
-                storedReference: stored,
-                publicKey: key.publicKey.rawRepresentation
-            )
-        case .softwareMLDSA65:
-            let key = try MLDSA65.PrivateKey(integrityCheckedRepresentation: stored.data)
-            self.init(
-                boxed: .software(key),
                 storedReference: stored,
                 publicKey: key.publicKey.rawRepresentation
             )
@@ -207,8 +186,6 @@ private struct AnySigningKey: Sendable {
     func sign(_ payload: Data) throws -> Data {
         switch boxed {
         case .secureEnclave(let key):
-            return try key.signature(for: payload)
-        case .software(let key):
             return try key.signature(for: payload)
         }
     }
@@ -230,7 +207,6 @@ private struct AnySigningKey: Sendable {
     }
 
     private enum KeyBox: Sendable {
-        case secureEnclave(SecureEnclave.MLDSA65.PrivateKey)
-        case software(MLDSA65.PrivateKey)
+        case secureEnclave(SecureEnclave.MLDSA87.PrivateKey)
     }
 }

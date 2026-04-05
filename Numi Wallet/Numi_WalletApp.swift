@@ -3,11 +3,11 @@ import SwiftUI
 @main
 struct Numi_WalletApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var model = WalletAppModel()
+    @StateObject private var bootstrap = WalletBootstrapper()
 
     var body: some Scene {
         WindowGroup {
-            NumiRootExperienceView(model: model)
+            WalletBootstrapRootView(bootstrap: bootstrap)
                 .preferredColorScheme(.dark)
         }
         #if os(macOS)
@@ -16,15 +16,15 @@ struct Numi_WalletApp: App {
         .defaultSize(width: 1480, height: 960)
         #endif
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .background, model.supportsBackgroundRefresh {
+            if newPhase == .background, bootstrap.supportsBackgroundRefresh {
                 BackgroundRefreshCoordinator.shared.scheduleNextRefresh()
             }
         }
         #if os(iOS)
         .backgroundTask(.appRefresh(BackgroundRefreshCoordinator.taskIdentifier)) {
-            let supportsBackgroundRefresh = await MainActor.run { model.supportsBackgroundRefresh }
+            let supportsBackgroundRefresh = await MainActor.run { bootstrap.supportsBackgroundRefresh }
             guard supportsBackgroundRefresh else { return }
-            await model.performBackgroundRefresh()
+            await bootstrap.performBackgroundRefresh()
             BackgroundRefreshCoordinator.shared.scheduleNextRefresh()
         }
         #endif

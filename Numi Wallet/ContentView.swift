@@ -8,13 +8,13 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var model = WalletAppModel()
+    @StateObject private var bootstrap = WalletBootstrapper()
 
     var body: some View {
-        NumiRootExperienceView(model: model)
+        WalletBootstrapRootView(bootstrap: bootstrap)
     }
 }
 
 #Preview {
-    ContentView()
+    NumiRootExperienceView(model: WalletAppModel.preview())
 }

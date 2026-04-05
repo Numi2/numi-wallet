@@ -30,6 +30,7 @@ enum AppleSecurityCapabilityState: String, Sendable {
 
 enum AppleSecurityCapabilityID: String, Identifiable, Sendable {
     case postQuantumRoot
+    case postQuantumTransport
     case ownerAuthentication
     case appAttestation
     case nearbyTrust

@@ -1,0 +1,26 @@
+{
+  "assetCode": "NUMI",
+  "capabilities": {
+    "aliasDiscovery": false,
+    "dynamicFeeMarkets": false,
+    "pirStateUpdates": false,
+    "relaySubmission": false,
+    "tagRatchets": false
+  },
+  "coinID": "numi-mainnet",
+  "displayName": "Numi Sovereign Mainnet",
+  "format": "numi.coin-profile.v1",
+  "network": "mainnet",
+  "services": {
+    "discovery": null,
+    "feeOracle": null,
+    "pir": null,
+    "relayEgress": null,
+    "relayIngress": null
+  },
+  "transport": {
+    "batchWindowSeconds": 30,
+    "controlEnvelopeBytes": 4096,
+    "pirEnvelopeBytes": 1048576
+  }
+}

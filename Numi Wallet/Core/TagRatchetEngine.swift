@@ -11,7 +11,7 @@ struct TagRatchetEngine: Sendable {
         Data(
             SHA256.hash(
                 data: Data("numi.tag.bootstrap".utf8)
-                    + descriptor.taggingCurve25519PublicKey
+                    + descriptor.taggingPublicKey
                     + Data(descriptor.id.uuidString.utf8)
             )
         )
@@ -20,19 +20,16 @@ struct TagRatchetEngine: Sendable {
     func establishRelationship(
         alias: String?,
         peerDescriptor: PrivateReceiveDescriptor
-    ) throws -> (snapshot: TagRelationshipSnapshot, secrets: RatchetSecretMaterial, introductionPublicKey: Data) {
-        guard !peerDescriptor.taggingCurve25519PublicKey.isEmpty else {
+    ) throws -> (snapshot: TagRelationshipSnapshot, secrets: RatchetSecretMaterial, introductionEncapsulatedKey: Data) {
+        guard !peerDescriptor.taggingPublicKey.isEmpty else {
             throw WalletError.descriptorUpgradeRequired
         }
 
-        let introductionKey = Curve25519.KeyAgreement.PrivateKey()
-        let peerKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerDescriptor.taggingCurve25519PublicKey)
-        let sharedSecret = try introductionKey.sharedSecretFromKeyAgreement(with: peerKey)
-        let rootKey = sharedSecret.hkdfDerivedSymmetricKey(
-            using: SHA256.self,
-            salt: peerDescriptor.offlineToken,
-            sharedInfo: Data("numi.tag.ratchet.root".utf8),
-            outputByteCount: 32
+        let peerKey = try XWingMLKEM768X25519.PublicKey(rawRepresentation: peerDescriptor.taggingPublicKey)
+        let introduction = try peerKey.encapsulate()
+        let rootKey = deriveRootKey(
+            from: introduction.sharedSecret,
+            offlineToken: peerDescriptor.offlineToken
         )
         let rootData = rootKey.withUnsafeBytes { Data($0) }
         let outgoing = Data(SHA256.hash(data: rootData + Data("outgoing".utf8)))
@@ -43,8 +40,8 @@ struct TagRatchetEngine: Sendable {
                 id: UUID(),
                 alias: alias,
                 peerDescriptorID: peerDescriptor.id,
-                peerTaggingPublicKey: peerDescriptor.taggingCurve25519PublicKey,
-                introductionPublicKey: introductionKey.publicKey.rawRepresentation,
+                peerTaggingPublicKey: peerDescriptor.taggingPublicKey,
+                introductionEncapsulatedKey: introduction.encapsulated,
                 direction: .outbound,
                 nextOutgoingCounter: 0,
                 nextIncomingCounter: 0,
@@ -52,7 +49,7 @@ struct TagRatchetEngine: Sendable {
                 lastActivityAt: nil
             ),
             secrets: RatchetSecretMaterial(outgoingChainKey: outgoing, incomingChainKey: incoming),
-            introductionPublicKey: introductionKey.publicKey.rawRepresentation
+            introductionEncapsulatedKey: introduction.encapsulated
         )
     }
 
@@ -60,21 +57,15 @@ struct TagRatchetEngine: Sendable {
         alias: String?,
         descriptor: PrivateReceiveDescriptor,
         descriptorSecrets: DescriptorPrivateMaterial,
-        introductionPublicKey: Data
+        introductionEncapsulatedKey: Data
     ) throws -> (snapshot: TagRelationshipSnapshot, secrets: RatchetSecretMaterial) {
         guard !descriptorSecrets.taggingKey.isEmpty else {
             throw WalletError.descriptorUpgradeRequired
         }
 
-        let localKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: descriptorSecrets.taggingKey)
-        let peerKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: introductionPublicKey)
-        let sharedSecret = try localKey.sharedSecretFromKeyAgreement(with: peerKey)
-        let rootKey = sharedSecret.hkdfDerivedSymmetricKey(
-            using: SHA256.self,
-            salt: descriptor.offlineToken,
-            sharedInfo: Data("numi.tag.ratchet.root".utf8),
-            outputByteCount: 32
-        )
+        let localKey = try XWingMLKEM768X25519.PrivateKey(integrityCheckedRepresentation: descriptorSecrets.taggingKey)
+        let sharedSecret = try localKey.decapsulate(introductionEncapsulatedKey)
+        let rootKey = deriveRootKey(from: sharedSecret, offlineToken: descriptor.offlineToken)
         let rootData = rootKey.withUnsafeBytes { Data($0) }
         let outgoing = Data(SHA256.hash(data: rootData + Data("incoming".utf8)))
         let incoming = Data(SHA256.hash(data: rootData + Data("outgoing".utf8)))
@@ -84,8 +75,8 @@ struct TagRatchetEngine: Sendable {
                 id: UUID(),
                 alias: alias,
                 peerDescriptorID: descriptor.id,
-                peerTaggingPublicKey: introductionPublicKey,
-                introductionPublicKey: introductionPublicKey,
+                peerTaggingPublicKey: Data(),
+                introductionEncapsulatedKey: introductionEncapsulatedKey,
                 direction: .inbound,
                 nextOutgoingCounter: 0,
                 nextIncomingCounter: 0,
@@ -121,5 +112,14 @@ struct TagRatchetEngine: Sendable {
         let tag = Data(SHA256.hash(data: chainKey + Data("tag".utf8)))
         let next = Data(SHA256.hash(data: chainKey + Data("next".utf8)))
         return RatchetedTag(tag: tag, updatedChainKey: next)
+    }
+
+    private func deriveRootKey(from sharedSecret: SymmetricKey, offlineToken: Data) -> SymmetricKey {
+        HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: sharedSecret,
+            salt: offlineToken,
+            info: Data("numi.tag.ratchet.root".utf8),
+            outputByteCount: 32
+        )
     }
 }

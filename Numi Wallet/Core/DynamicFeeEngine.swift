@@ -26,7 +26,7 @@ actor DynamicFeeEngine {
             throw WalletError.insufficientFunds
         }
 
-        let hotkey = try MLDSA65.PrivateKey()
+        let hotkey = try MLDSA87.PrivateKey()
         let commitmentSalt = randomData(length: 32)
         let commitment = Data(
             SHA256.hash(
@@ -56,7 +56,7 @@ actor DynamicFeeEngine {
                 generatedAt: Date()
             ),
             hotkey: AuthorizedFeeHotkey(
-                algorithm: "ML-DSA-65",
+                algorithm: "ML-DSA-87",
                 publicKey: hotkey.publicKey.rawRepresentation,
                 authorizationSignature: authorizationSignature,
                 expiresAt: min(quote.expiresAt, Date().addingTimeInterval(120))
@@ -79,7 +79,7 @@ actor DynamicFeeEngine {
         draft: SpendDraft,
         source: ShieldedSpendSource
     ) throws -> DynamicFeeAuthorizationBundle {
-        let hotkey = try MLDSA65.PrivateKey()
+        let hotkey = try MLDSA87.PrivateKey()
         let settlementDigest = Data(
             SHA256.hash(
                 data: source.nullifier
@@ -103,7 +103,7 @@ actor DynamicFeeEngine {
                 generatedAt: Date()
             ),
             hotkey: AuthorizedFeeHotkey(
-                algorithm: "ML-DSA-65",
+                algorithm: "ML-DSA-87",
                 publicKey: hotkey.publicKey.rawRepresentation,
                 authorizationSignature: try hotkey.signature(for: settlementDigest),
                 expiresAt: Date().addingTimeInterval(120)

@@ -8,6 +8,8 @@ This document turns Numi's architecture into a cross-device product design plan 
 
 See also:
 
+- [Numi Future Of Crypto Roadmap](NUMI_FUTURE_OF_CRYPTO_ROADMAP.md)
+- [Numi Tachyon Execution Guide](NUMI_TACHYON_EXECUTION_GUIDE.md)
 - [Numi Architecture And Roadmap](NUMI_ARCHITECTURE_AND_ROADMAP.md)
 - [Numi State Of The Art Apple Plan](NUMI_STATE_OF_THE_ART_APPLE_PLAN.md)
 

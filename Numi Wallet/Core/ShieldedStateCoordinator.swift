@@ -3,7 +3,7 @@ import Foundation
 struct OutgoingTagPlan {
     var tag: Data
     var relationshipID: UUID?
-    var introductionPublicKey: Data?
+    var introductionEncapsulatedKey: Data?
     var isIntroductionPayment: Bool
 }
 
@@ -40,7 +40,7 @@ actor ShieldedStateCoordinator {
             return OutgoingTagPlan(
                 tag: Data(),
                 relationshipID: nil,
-                introductionPublicKey: nil,
+                introductionEncapsulatedKey: nil,
                 isIntroductionPayment: false
             )
         }
@@ -60,7 +60,7 @@ actor ShieldedStateCoordinator {
             return OutgoingTagPlan(
                 tag: ratcheted.tag,
                 relationshipID: relationship.id,
-                introductionPublicKey: nil,
+                introductionEncapsulatedKey: nil,
                 isIntroductionPayment: false
             )
         }
@@ -79,7 +79,7 @@ actor ShieldedStateCoordinator {
         return OutgoingTagPlan(
             tag: ratcheted.tag,
             relationshipID: relationship.id,
-            introductionPublicKey: established.introductionPublicKey,
+            introductionEncapsulatedKey: established.introductionEncapsulatedKey,
             isIntroductionPayment: true
         )
     }
@@ -203,7 +203,7 @@ actor ShieldedStateCoordinator {
     ) async throws -> TagQueryPlan {
         var plan = TagQueryPlan()
 
-        for descriptor in activeDescriptors where !descriptor.taggingCurve25519PublicKey.isEmpty {
+        for descriptor in activeDescriptors where !descriptor.taggingPublicKey.isEmpty {
             let tag = tagRatchetEngine.bootstrapTag(for: descriptor)
             plan.bootstrapDescriptorByTag[tag] = descriptor.id
             plan.allTags.append(tag)
@@ -258,7 +258,7 @@ actor ShieldedStateCoordinator {
             return relationship.id
         }
 
-        guard let introductionKey = match.senderIntroductionPublicKey else {
+        guard let introductionKey = match.senderIntroductionEncapsulatedKey else {
             return nil
         }
 
@@ -267,7 +267,7 @@ actor ShieldedStateCoordinator {
             alias: descriptor.aliasHint,
             descriptor: descriptor,
             descriptorSecrets: descriptorMaterial,
-            introductionPublicKey: introductionKey
+            introductionEncapsulatedKey: introductionKey
         )
         var relationship = derived.snapshot
         var secrets = derived.secrets

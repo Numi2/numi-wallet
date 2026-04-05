@@ -54,13 +54,6 @@ struct WalletDashboardView: View {
         _selectedDeck = State(initialValue: resolvedDeck)
     }
 
-    @MainActor
-    init() {
-        let model = WalletAppModel()
-        _model = StateObject(wrappedValue: model)
-        _selectedDeck = State(initialValue: DashboardDeck.defaultDeck(for: model.role))
-    }
-
     private var prefersCompactColumns: Bool {
         horizontalSizeClass == .compact
     }
@@ -3965,5 +3958,5 @@ private struct NumiPrivilegedAuthenticationView: View {
 }
 
 #Preview {
-    WalletDashboardView()
+    WalletDashboardView(model: WalletAppModel.preview())
 }
