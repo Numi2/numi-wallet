@@ -19,6 +19,10 @@ enum WalletExperienceEventKind: String, Sendable {
     case shieldedStateRefreshed
     case transferSubmitted
     case recoveryPrepared
+    case recoveryTransferAwaitingApproval
+    case recoveryTransferLoaded
+    case recoveryTransferDispatched
+    case recoveryTransferRejected
     case recoveryShareImported
     case recoveryShareExported
     case sensitiveWorkspaceScrubbed
@@ -56,6 +60,14 @@ enum WalletExperienceEventKind: String, Sendable {
             return "Private Transfer Submitted"
         case .recoveryPrepared:
             return "Recovery Pair Prepared"
+        case .recoveryTransferAwaitingApproval:
+            return "Recovery Transfer Waiting"
+        case .recoveryTransferLoaded:
+            return "Recovery Transfer Loaded"
+        case .recoveryTransferDispatched:
+            return "Recovery Transfer Sent"
+        case .recoveryTransferRejected:
+            return "Recovery Transfer Rejected"
         case .recoveryShareImported:
             return "Peer Share Imported"
         case .recoveryShareExported:
@@ -107,6 +119,14 @@ enum WalletExperienceEventKind: String, Sendable {
             return "paperplane.circle.fill"
         case .recoveryPrepared:
             return "person.2.fill"
+        case .recoveryTransferAwaitingApproval:
+            return "tray.full.fill"
+        case .recoveryTransferLoaded:
+            return "tray.and.arrow.down.fill"
+        case .recoveryTransferDispatched:
+            return "wave.3.left.circle.fill"
+        case .recoveryTransferRejected:
+            return "tray.and.arrow.up.fill"
         case .recoveryShareImported:
             return "square.and.arrow.down.fill"
         case .recoveryShareExported:
@@ -139,10 +159,12 @@ enum WalletExperienceEventKind: String, Sendable {
         case .launchReady, .aliasResolved, .descriptorRotated:
             return .selection
         case .authorityInitialized, .dayWalletUnlocked, .vaultUnlocked, .shieldedStateRefreshed, .transferSubmitted,
-                .recoveryPrepared, .recoveryShareImported, .recoveryShareExported, .authorityRecovered, .proofCompleted,
+                .recoveryPrepared, .recoveryTransferLoaded, .recoveryTransferDispatched, .recoveryShareImported, .recoveryShareExported, .authorityRecovered, .proofCompleted,
                 .peerPresenceEstablished:
             return .success
-        case .vaultSealed, .privacyShieldRaised, .peerPresenceLost, .sensitiveWorkspaceScrubbed, .proofDeferred, .proofDiscarded:
+        case .recoveryTransferAwaitingApproval:
+            return .selection
+        case .vaultSealed, .privacyShieldRaised, .peerPresenceLost, .sensitiveWorkspaceScrubbed, .proofDeferred, .proofDiscarded, .recoveryTransferRejected:
             return .warning
         case .panicWipe, .failure:
             return .error
@@ -195,14 +217,13 @@ struct RecoveryWorkspaceSummary: Sendable {
 }
 
 enum RecoveryWorkspaceInspector {
-    static func inspect(text: String) -> RecoveryWorkspaceSummary {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+    static func inspect(stagedTransfer: StagedRecoveryTransfer?) -> RecoveryWorkspaceSummary {
+        guard let stagedTransfer else {
             return RecoveryWorkspaceSummary(
-                title: "Workspace Empty",
-                subtitle: "No staged recovery material",
-                recommendation: "Use this surface only for bounded local custody actions. The shipping product should eventually replace freeform text with authenticated device-to-device transfer.",
-                systemImage: "tray",
+                title: "Transfer Lane Idle",
+                subtitle: "No signed recovery transfer staged",
+                recommendation: "Import a canonical signed Numi transfer document or prepare a new local transfer before attempting recovery actions.",
+                systemImage: "tray.fill",
                 tone: .neutral,
                 facts: [],
                 canImportShare: false,
@@ -210,114 +231,62 @@ enum RecoveryWorkspaceInspector {
             )
         }
 
-        let decoder = JSONDecoder()
-        let data = Data(trimmed.utf8)
+        let envelope = stagedTransfer.document.envelope
+        let documentDigest = hexPrefix(stagedTransfer.document.envelopeDigest)
+        let qrChunkCount = "\(stagedTransfer.qrChunks.count)"
 
-        if let envelope = try? decoder.decode(RecoveryTransferEnvelope.self, from: data) {
-            switch envelope.payload {
-            case .authorityBundle(let shares):
-                let peerNames = shares.map(\.peerName).joined(separator: ", ")
-                return RecoveryWorkspaceSummary(
-                    title: "Signed Authority Recovery Envelope",
-                    subtitle: "\(shares.count) fragment(s) for \(envelope.recipientRole.displayName)",
-                    recommendation: envelope.isExpired
-                        ? "This transfer envelope has expired. Generate a new local recovery transfer before attempting re-enrollment."
-                        : "This signed transfer envelope is bounded to authority recovery. It should replace raw bundle handling wherever possible.",
-                    systemImage: "checkmark.shield.fill",
-                    tone: envelope.isExpired ? .critical : .ready,
-                    facts: [
-                        RecoveryWorkspaceFact(label: "Sender Role", value: envelope.senderRole.displayName),
-                        RecoveryWorkspaceFact(label: "Recipients", value: peerNames),
-                        RecoveryWorkspaceFact(label: "Expires", value: formatted(envelope.expiresAt)),
-                        RecoveryWorkspaceFact(label: "Trust Session", value: envelope.trustSessionFingerprint ?? "None")
-                    ],
-                    canImportShare: false,
-                    canRecoverAuthority: !envelope.isExpired && envelope.recipientRole == .authorityPhone
-                )
-            case .peerShare(let share):
-                return RecoveryWorkspaceSummary(
-                    title: "Signed Peer Share Envelope",
-                    subtitle: "\(share.peerName) • \(envelope.recipientRole.displayName)",
-                    recommendation: envelope.isExpired
-                        ? "This transfer envelope has expired. Generate a new local recovery transfer before importing."
-                        : "This signed transfer envelope is the preferred transitional format for peer share handling until authenticated device transfer fully replaces workspace staging.",
-                    systemImage: "checkmark.shield.fill",
-                    tone: envelope.isExpired ? .critical : .ready,
-                    facts: [
-                        RecoveryWorkspaceFact(label: "Sender Role", value: envelope.senderRole.displayName),
-                        RecoveryWorkspaceFact(label: "Recipient", value: envelope.recipientRole.displayName),
-                        RecoveryWorkspaceFact(label: "Peer", value: share.peerName),
-                        RecoveryWorkspaceFact(label: "Expires", value: formatted(envelope.expiresAt))
-                    ],
-                    canImportShare: !envelope.isExpired && envelope.recipientRole != .authorityPhone,
-                    canRecoverAuthority: false
-                )
-            }
-        }
-
-        if let shares = try? decoder.decode([RecoveryShareEnvelope].self, from: data), !shares.isEmpty {
+        switch envelope.payload {
+        case .authorityBundle(let shares):
             let peerNames = shares.map(\.peerName).joined(separator: ", ")
-            let packageIDs = Set(shares.map { $0.recoveryPackage.packageID.uuidString.prefix(8).description }).sorted().joined(separator: ", ")
-            let latest = shares.map(\.createdAt).max() ?? Date()
-
             return RecoveryWorkspaceSummary(
-                title: "Recovery Quorum Staged",
-                subtitle: "\(shares.count) peer fragment(s) loaded",
-                recommendation: "This payload can re-enroll a new authority device after local approval, but it remains a legacy raw bundle. Prefer signed transfer envelopes instead.",
-                systemImage: "person.2.badge.key.fill",
-                tone: .caution,
+                title: "Signed Authority Recovery Document",
+                subtitle: "\(shares.count) fragment(s) for \(envelope.recipientRole.displayName)",
+                recommendation: envelope.isExpired
+                    ? "This recovery document has expired. Generate a new signed local transfer before attempting authority re-enrollment."
+                    : "This canonical Numi transfer document is bounded to authority re-enrollment and can move through file or QR transport without becoming editable recovery JSON.",
+                systemImage: "checkmark.shield.fill",
+                tone: envelope.isExpired ? .critical : .ready,
                 facts: [
-                    RecoveryWorkspaceFact(label: "Peers", value: peerNames),
-                    RecoveryWorkspaceFact(label: "Package IDs", value: packageIDs),
-                    RecoveryWorkspaceFact(label: "Last Created", value: formatted(latest))
+                    RecoveryWorkspaceFact(label: "Sender Role", value: envelope.senderRole.displayName),
+                    RecoveryWorkspaceFact(label: "Recipients", value: peerNames),
+                    RecoveryWorkspaceFact(label: "Expires", value: formatted(envelope.expiresAt)),
+                    RecoveryWorkspaceFact(label: "QR Chunks", value: qrChunkCount),
+                    RecoveryWorkspaceFact(label: "Digest", value: documentDigest),
+                    RecoveryWorkspaceFact(label: "Trust Session", value: envelope.trustSessionFingerprint ?? "None")
                 ],
                 canImportShare: false,
-                canRecoverAuthority: true
+                canRecoverAuthority: !envelope.isExpired && envelope.recipientRole == .authorityPhone
             )
-        }
-
-        if let share = try? decoder.decode(RecoveryShareEnvelope.self, from: data) {
+        case .peerShare(let share):
+            let hasTrustBinding = envelope.trustSessionFingerprint?.isEmpty == false
             return RecoveryWorkspaceSummary(
-                title: "Peer Share Staged",
-                subtitle: "\(share.peerName) • \(share.peerKind.displayName)",
-                recommendation: "This payload can be imported into the matching peer role, but it remains a legacy raw share. Prefer signed transfer envelopes instead.",
-                systemImage: "person.badge.key.fill",
-                tone: .caution,
+                title: "Signed Peer Share Document",
+                subtitle: "\(share.peerName) • \(envelope.recipientRole.displayName)",
+                recommendation: envelope.isExpired
+                    ? "This peer-share document has expired. Generate a new signed transfer before importing."
+                    : hasTrustBinding
+                        ? "This canonical Numi transfer document is bounded to a live peer-trust session and can move through file or QR transport without exposing editable custody material."
+                        : "This document is missing its peer-trust binding and must be replaced before any peer-share import.",
+                systemImage: "checkmark.shield.fill",
+                tone: envelope.isExpired || !hasTrustBinding ? .critical : .ready,
                 facts: [
-                    RecoveryWorkspaceFact(label: "Device", value: abbreviated(share.deviceID, prefix: 8)),
-                    RecoveryWorkspaceFact(label: "Package", value: share.recoveryPackage.packageID.uuidString.prefix(8).description),
-                    RecoveryWorkspaceFact(label: "Root Digest", value: hexPrefix(share.rootKeyDigest)),
-                    RecoveryWorkspaceFact(label: "Created", value: formatted(share.createdAt))
+                    RecoveryWorkspaceFact(label: "Sender Role", value: envelope.senderRole.displayName),
+                    RecoveryWorkspaceFact(label: "Recipient", value: envelope.recipientRole.displayName),
+                    RecoveryWorkspaceFact(label: "Peer", value: share.peerName),
+                    RecoveryWorkspaceFact(label: "Expires", value: formatted(envelope.expiresAt)),
+                    RecoveryWorkspaceFact(label: "QR Chunks", value: qrChunkCount),
+                    RecoveryWorkspaceFact(label: "Digest", value: documentDigest),
+                    RecoveryWorkspaceFact(label: "Trust Session", value: envelope.trustSessionFingerprint ?? "Missing")
                 ],
-                canImportShare: true,
+                canImportShare: !envelope.isExpired && hasTrustBinding && envelope.recipientRole != .authorityPhone,
                 canRecoverAuthority: false
             )
         }
-
-        return RecoveryWorkspaceSummary(
-            title: "Workspace Unreadable",
-            subtitle: "Staged text is not a recognized recovery payload",
-            recommendation: "Only a single peer share or a full quorum bundle should be staged here. Any other payload should be cleared.",
-            systemImage: "exclamationmark.triangle.fill",
-            tone: .critical,
-            facts: [
-                RecoveryWorkspaceFact(label: "Bytes", value: "\(data.count)"),
-                RecoveryWorkspaceFact(label: "Status", value: "JSON payload did not match the expected recovery structures")
-            ],
-            canImportShare: false,
-            canRecoverAuthority: false
-        )
     }
 
     private static func formatted(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
     }
-
-    private static func abbreviated(_ value: String, prefix: Int) -> String {
-        let leading = value.prefix(prefix)
-        return value.count > prefix ? "\(leading)…" : String(leading)
-    }
-
     private static func hexPrefix(_ data: Data, bytes: Int = 8) -> String {
         data.prefix(bytes).map { String(format: "%02x", $0) }.joined()
     }

@@ -68,6 +68,14 @@ enum ShieldedRefreshTrigger: String, Codable, Sendable {
     case manual
 }
 
+struct ShieldedInboxResumptionMaterial: Codable, Hashable, Sendable {
+    var matchedTag: Data
+    var senderIntroductionEncapsulatedKey: Data?
+    var lookaheadStep: Int?
+    var decryptedPayload: ShieldedRecipientPayload?
+    var decodedNote: TachyonDecodedNote?
+}
+
 struct DescriptorPrivateMaterial: Codable, Sendable {
     var deliveryKey: Data
     var taggingKey: Data
@@ -102,6 +110,7 @@ struct ShieldedInboxJournalEntry: Codable, Identifiable, Hashable, Sendable {
     var receivedAt: Date
     var updatedAt: Date
     var detail: String?
+    var resumptionMaterial: ShieldedInboxResumptionMaterial?
 }
 
 struct ShieldedNoteWitness: Codable, Identifiable, Hashable, Sendable {
@@ -794,7 +803,7 @@ struct ShieldedWalletSnapshot: Codable, Sendable {
     }
 }
 
-struct ShieldedRecipientPayload: Codable, Sendable {
+struct ShieldedRecipientPayload: Codable, Hashable, Sendable {
     var noteCommitment: Data
     var nullifier: Data
     var amount: MoneyAmount

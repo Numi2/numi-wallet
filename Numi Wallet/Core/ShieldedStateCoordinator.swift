@@ -159,6 +159,23 @@ actor ShieldedStateCoordinator {
             readinessDetail = "Quick private refresh required to rebuild discovery tickets."
         }
 
+        do {
+            try await resumeInterruptedInboxEntries(
+                profile: &profile,
+                descriptorsByID: descriptorsByID,
+                checkpoint: checkpoint
+            )
+        } catch {
+            guard trigger == .backgroundMaintenance, isProtectedDataAccessFailure(error) else {
+                throw error
+            }
+            deferredMatchCount += profile.shielded.inboxJournal.filter {
+                $0.stage == .payloadDecrypted || $0.stage == .payloadValidated
+            }.count
+            readinessClassification = combineReadinessClassification(readinessClassification, .degraded)
+            readinessDetail = "Background refresh deferred interrupted note ingestion until the device is unlocked."
+        }
+
         var observedBlockHeights: [UInt64] = []
         let tagResponse: PIRTagLookupResponse
         if tagPlan.allTags.isEmpty {
@@ -203,9 +220,10 @@ actor ShieldedStateCoordinator {
                 tagDigest: tagDigest,
                 knownDescriptorIDs: knownDescriptorIDs
             )
+            let relationshipInfo = tagPlan.relationshipByTagDigest[interpretedMatch.tagDigest]
             if isReplayMatch(
                 profile: profile,
-                queryPlan: tagPlan,
+                relationshipID: relationshipInfo?.relationshipID,
                 tagDigest: interpretedMatch.tagDigest,
                 ciphertextDigest: interpretedMatch.ciphertextDigest
             ) {
@@ -219,17 +237,35 @@ actor ShieldedStateCoordinator {
                     tagDigest: interpretedMatch.tagDigest,
                     ciphertextDigest: interpretedMatch.ciphertextDigest,
                     descriptorID: descriptor.id,
-                    relationshipID: interpretedMatch.relationshipID,
+                    relationshipID: relationshipInfo?.relationshipID,
                     noteID: nil,
                     noteCommitment: nil,
                     receivedAt: match.receivedAt,
                     updatedAt: refreshStartedAt,
-                    detail: "Matched incoming Tachyon discovery tag."
+                    detail: "Matched incoming Tachyon discovery tag.",
+                    resumptionMaterial: ShieldedInboxResumptionMaterial(
+                        matchedTag: match.tag,
+                        senderIntroductionEncapsulatedKey: match.senderIntroductionEncapsulatedKey,
+                        lookaheadStep: relationshipInfo?.steps,
+                        decryptedPayload: nil,
+                        decodedNote: nil
+                    )
                 )
             )
             try await checkpoint?(profile)
             do {
                 let payload = try await decodeRecipientPayload(match: match, descriptor: descriptor)
+                setInboxJournalResumptionMaterial(
+                    in: &profile,
+                    id: journalID,
+                    material: ShieldedInboxResumptionMaterial(
+                        matchedTag: match.tag,
+                        senderIntroductionEncapsulatedKey: match.senderIntroductionEncapsulatedKey,
+                        lookaheadStep: relationshipInfo?.steps,
+                        decryptedPayload: payload,
+                        decodedNote: nil
+                    )
+                )
                 updateInboxJournalEntry(
                     in: &profile,
                     id: journalID,
@@ -237,68 +273,20 @@ actor ShieldedStateCoordinator {
                     detail: "Recipient payload decrypted on device."
                 )
                 try await checkpoint?(profile)
-                guard !profile.shielded.notes.contains(where: { $0.noteCommitment == payload.noteCommitment }) else {
-                    updateInboxJournalEntry(
-                        in: &profile,
-                        id: journalID,
-                        stage: .spendabilityClassified,
-                        noteCommitment: payload.noteCommitment,
-                        detail: "Duplicate note commitment ignored."
-                    )
-                    try await checkpoint?(profile)
-                    continue
-                }
-                let relationshipID = try await consumeIncomingMatch(
+                try await continueMatchIngestion(
                     profile: &profile,
-                    match: match,
+                    journalID: journalID,
                     descriptor: descriptor,
-                    queryPlan: tagPlan,
-                    tagDigest: tagDigest,
-                    ciphertextDigest: interpretedMatch.ciphertextDigest
+                    matchedRelationshipID: relationshipInfo?.relationshipID,
+                    lookaheadStep: relationshipInfo?.steps,
+                    tagDigest: interpretedMatch.tagDigest,
+                    ciphertextDigest: interpretedMatch.ciphertextDigest,
+                    payload: payload,
+                    matchTag: match.tag,
+                    senderIntroductionEncapsulatedKey: match.senderIntroductionEncapsulatedKey,
+                    receivedAt: match.receivedAt,
+                    checkpoint: checkpoint
                 )
-                let decodedNote = try tachyonStateAdapter.makeDecodedNote(
-                    from: payload,
-                    match: match,
-                    descriptor: descriptor,
-                    relationshipID: relationshipID
-                )
-                updateInboxJournalEntry(
-                    in: &profile,
-                    id: journalID,
-                    stage: .payloadValidated,
-                    relationshipID: relationshipID,
-                    noteCommitment: decodedNote.noteCommitment,
-                    detail: "Payload validated through the Tachyon state adapter."
-                )
-                try await checkpoint?(profile)
-                let note = ShieldedNoteWitness(
-                    id: UUID(),
-                    tier: descriptor.tier,
-                    noteCommitment: decodedNote.noteCommitment,
-                    nullifier: decodedNote.nullifier,
-                    amount: decodedNote.amount,
-                    memo: decodedNote.memo,
-                    receivedAt: decodedNote.receivedAt,
-                    descriptorID: decodedNote.descriptorID,
-                    relationshipID: decodedNote.relationshipID,
-                    latestTag: decodedNote.latestTag,
-                    merklePath: nil,
-                    lastMerkleUpdateAt: nil,
-                    lastNullifierCheckAt: nil,
-                    readinessState: .discovered,
-                    spendState: .ready
-                )
-                profile.shielded.notes.append(note)
-                updateInboxJournalEntry(
-                    in: &profile,
-                    id: journalID,
-                    stage: .noteInserted,
-                    relationshipID: relationshipID,
-                    noteID: note.id,
-                    noteCommitment: note.noteCommitment,
-                    detail: "Note inserted into shielded state as discovered."
-                )
-                try await checkpoint?(profile)
             } catch {
                 if trigger == .backgroundMaintenance, isProtectedDataAccessFailure(error) {
                     deferredMatchCount += 1
@@ -660,23 +648,251 @@ actor ShieldedStateCoordinator {
         return try JSONDecoder().decode(ShieldedRecipientPayload.self, from: plaintext)
     }
 
+    private func resumeInterruptedInboxEntries(
+        profile: inout WalletProfile,
+        descriptorsByID: [UUID: PrivateReceiveDescriptor],
+        checkpoint: ((WalletProfile) async throws -> Void)?
+    ) async throws {
+        let resumableEntries = profile.shielded.inboxJournal
+            .filter { $0.stage == .payloadDecrypted || $0.stage == .payloadValidated }
+            .sorted { $0.receivedAt < $1.receivedAt }
+
+        for entry in resumableEntries {
+            guard let descriptor = descriptorsByID[entry.descriptorID] else {
+                updateInboxJournalEntry(
+                    in: &profile,
+                    id: entry.id,
+                    stage: .failed,
+                    detail: "Receive descriptor is no longer active; the interrupted note could not be resumed."
+                )
+                try await checkpoint?(profile)
+                continue
+            }
+
+            guard let resumptionMaterial = entry.resumptionMaterial else {
+                updateInboxJournalEntry(
+                    in: &profile,
+                    id: entry.id,
+                    stage: .failed,
+                    detail: "Receive journal entry is missing resumable note-ingestion context."
+                )
+                try await checkpoint?(profile)
+                continue
+            }
+
+            switch entry.stage {
+            case .payloadDecrypted:
+                guard let payload = resumptionMaterial.decryptedPayload else {
+                    updateInboxJournalEntry(
+                        in: &profile,
+                        id: entry.id,
+                        stage: .failed,
+                        detail: "Decrypted receive payload is unavailable for resumption."
+                    )
+                    try await checkpoint?(profile)
+                    continue
+                }
+                try await continueMatchIngestion(
+                    profile: &profile,
+                    journalID: entry.id,
+                    descriptor: descriptor,
+                    matchedRelationshipID: entry.relationshipID,
+                    lookaheadStep: resumptionMaterial.lookaheadStep,
+                    tagDigest: entry.tagDigest,
+                    ciphertextDigest: entry.ciphertextDigest,
+                    payload: payload,
+                    matchTag: resumptionMaterial.matchedTag,
+                    senderIntroductionEncapsulatedKey: resumptionMaterial.senderIntroductionEncapsulatedKey,
+                    receivedAt: entry.receivedAt,
+                    checkpoint: checkpoint
+                )
+            case .payloadValidated:
+                guard let decodedNote = resumptionMaterial.decodedNote else {
+                    updateInboxJournalEntry(
+                        in: &profile,
+                        id: entry.id,
+                        stage: .failed,
+                        detail: "Validated note payload is unavailable for resumption."
+                    )
+                    try await checkpoint?(profile)
+                    continue
+                }
+                try await insertDecodedNote(
+                    profile: &profile,
+                    journalID: entry.id,
+                    descriptor: descriptor,
+                    relationshipID: entry.relationshipID ?? decodedNote.relationshipID,
+                    decodedNote: decodedNote,
+                    checkpoint: checkpoint
+                )
+            default:
+                continue
+            }
+        }
+    }
+
+    private func continueMatchIngestion(
+        profile: inout WalletProfile,
+        journalID: UUID,
+        descriptor: PrivateReceiveDescriptor,
+        matchedRelationshipID: UUID?,
+        lookaheadStep: Int?,
+        tagDigest: Data,
+        ciphertextDigest: Data,
+        payload: ShieldedRecipientPayload,
+        matchTag: Data,
+        senderIntroductionEncapsulatedKey: Data?,
+        receivedAt: Date,
+        checkpoint: ((WalletProfile) async throws -> Void)?
+    ) async throws {
+        guard !profile.shielded.notes.contains(where: { $0.noteCommitment == payload.noteCommitment }) else {
+            clearInboxJournalResumptionMaterial(in: &profile, id: journalID)
+            updateInboxJournalEntry(
+                in: &profile,
+                id: journalID,
+                stage: .spendabilityClassified,
+                noteCommitment: payload.noteCommitment,
+                detail: "Duplicate note commitment ignored."
+            )
+            try await checkpoint?(profile)
+            return
+        }
+
+        let relationshipID: UUID
+        if let acceptedRelationshipID = acceptedRelationshipID(
+            in: profile,
+            ciphertextDigest: ciphertextDigest
+        ) {
+            relationshipID = acceptedRelationshipID
+        } else {
+            relationshipID = try await consumeIncomingMatch(
+                profile: &profile,
+                descriptor: descriptor,
+                matchedRelationshipID: matchedRelationshipID,
+                lookaheadStep: lookaheadStep,
+                introductionEncapsulatedKey: senderIntroductionEncapsulatedKey,
+                tagDigest: tagDigest,
+                ciphertextDigest: ciphertextDigest
+            )
+        }
+
+        let syntheticMatch = TaggedPaymentMatch(
+            tag: matchTag,
+            recipientDescriptorID: descriptor.id,
+            noteCiphertext: Data(),
+            senderIntroductionEncapsulatedKey: senderIntroductionEncapsulatedKey,
+            receivedAt: receivedAt
+        )
+        let decodedNote = try tachyonStateAdapter.makeDecodedNote(
+            from: payload,
+            match: syntheticMatch,
+            descriptor: descriptor,
+            relationshipID: relationshipID
+        )
+
+        setInboxJournalResumptionMaterial(
+            in: &profile,
+            id: journalID,
+            material: ShieldedInboxResumptionMaterial(
+                matchedTag: matchTag,
+                senderIntroductionEncapsulatedKey: senderIntroductionEncapsulatedKey,
+                lookaheadStep: lookaheadStep,
+                decryptedPayload: payload,
+                decodedNote: decodedNote
+            )
+        )
+        updateInboxJournalEntry(
+            in: &profile,
+            id: journalID,
+            stage: .payloadValidated,
+            relationshipID: relationshipID,
+            noteCommitment: decodedNote.noteCommitment,
+            detail: "Payload validated through the Tachyon state adapter."
+        )
+        try await checkpoint?(profile)
+
+        try await insertDecodedNote(
+            profile: &profile,
+            journalID: journalID,
+            descriptor: descriptor,
+            relationshipID: relationshipID,
+            decodedNote: decodedNote,
+            checkpoint: checkpoint
+        )
+    }
+
+    private func insertDecodedNote(
+        profile: inout WalletProfile,
+        journalID: UUID,
+        descriptor: PrivateReceiveDescriptor,
+        relationshipID: UUID?,
+        decodedNote: TachyonDecodedNote,
+        checkpoint: ((WalletProfile) async throws -> Void)?
+    ) async throws {
+        guard !profile.shielded.notes.contains(where: { $0.noteCommitment == decodedNote.noteCommitment }) else {
+            clearInboxJournalResumptionMaterial(in: &profile, id: journalID)
+            updateInboxJournalEntry(
+                in: &profile,
+                id: journalID,
+                stage: .spendabilityClassified,
+                relationshipID: relationshipID,
+                noteCommitment: decodedNote.noteCommitment,
+                detail: "Duplicate note commitment ignored."
+            )
+            try await checkpoint?(profile)
+            return
+        }
+
+        let note = ShieldedNoteWitness(
+            id: UUID(),
+            tier: descriptor.tier,
+            noteCommitment: decodedNote.noteCommitment,
+            nullifier: decodedNote.nullifier,
+            amount: decodedNote.amount,
+            memo: decodedNote.memo,
+            receivedAt: decodedNote.receivedAt,
+            descriptorID: decodedNote.descriptorID,
+            relationshipID: decodedNote.relationshipID,
+            latestTag: decodedNote.latestTag,
+            merklePath: nil,
+            lastMerkleUpdateAt: nil,
+            lastNullifierCheckAt: nil,
+            readinessState: .discovered,
+            spendState: .ready
+        )
+        profile.shielded.notes.append(note)
+        clearInboxJournalResumptionMaterial(in: &profile, id: journalID)
+        updateInboxJournalEntry(
+            in: &profile,
+            id: journalID,
+            stage: .noteInserted,
+            relationshipID: relationshipID,
+            noteID: note.id,
+            noteCommitment: note.noteCommitment,
+            detail: "Note inserted into shielded state as discovered."
+        )
+        try await checkpoint?(profile)
+    }
+
     private func consumeIncomingMatch(
         profile: inout WalletProfile,
-        match: TaggedPaymentMatch,
         descriptor: PrivateReceiveDescriptor,
-        queryPlan: TagQueryPlan,
+        matchedRelationshipID: UUID?,
+        lookaheadStep: Int?,
+        introductionEncapsulatedKey: Data?,
         tagDigest: Data,
         ciphertextDigest: Data
-    ) async throws -> UUID? {
-        if let relationshipInfo = queryPlan.relationshipByTagDigest[tagDigest],
-           let index = profile.shielded.relationships.firstIndex(where: { $0.id == relationshipInfo.relationshipID }) {
+    ) async throws -> UUID {
+        if let matchedRelationshipID,
+           let index = profile.shielded.relationships.firstIndex(where: { $0.id == matchedRelationshipID }) {
             var relationship = profile.shielded.relationships[index]
             var secrets = try await ratchetSecretStore.load(relationshipID: relationship.id)
-            for _ in 0..<relationshipInfo.steps {
+            let steps = max(lookaheadStep ?? 1, 1)
+            for _ in 0..<steps {
                 let ratcheted = tagRatchetEngine.advanceIncomingTag(using: secrets)
                 secrets.incomingChainKey = ratcheted.updatedChainKey
             }
-            relationship.nextIncomingCounter += UInt64(relationshipInfo.steps)
+            relationship.nextIncomingCounter += UInt64(steps)
             relationship.lastIssuedIncomingLookaheadCounter = relationship.nextIncomingCounter + UInt64(max(relationship.lookaheadWindowSize, 1))
             relationship.lastAcceptedIncomingTagDigest = tagDigest
             recordAcceptedIncomingReplayEvidence(
@@ -692,8 +908,12 @@ actor ShieldedStateCoordinator {
             return relationship.id
         }
 
-        guard let introductionKey = match.senderIntroductionEncapsulatedKey else {
-            return nil
+        if matchedRelationshipID != nil {
+            throw WalletError.invalidShieldedPayload("Matched relationship cursor is unavailable for the received tag.")
+        }
+
+        guard let introductionEncapsulatedKey else {
+            throw WalletError.invalidShieldedPayload("Bootstrap receive is missing sender introduction material.")
         }
 
         let descriptorMaterial = try await descriptorSecretStore.load(descriptorID: descriptor.id, tier: descriptor.tier)
@@ -701,7 +921,7 @@ actor ShieldedStateCoordinator {
             alias: descriptor.aliasHint,
             descriptor: descriptor,
             descriptorSecrets: descriptorMaterial,
-            introductionEncapsulatedKey: introductionKey
+            introductionEncapsulatedKey: introductionEncapsulatedKey
         )
         var relationship = derived.snapshot
         var secrets = derived.secrets
@@ -729,6 +949,15 @@ actor ShieldedStateCoordinator {
         }
     }
 
+    private func acceptedRelationshipID(
+        in profile: WalletProfile,
+        ciphertextDigest: Data
+    ) -> UUID? {
+        profile.shielded.relationships.first { relationship in
+            relationship.acceptedCiphertextDigests.contains(ciphertextDigest)
+        }?.id
+    }
+
     private func upsertInboxJournalEntry(
         in profile: inout WalletProfile,
         entry: ShieldedInboxJournalEntry
@@ -741,6 +970,9 @@ actor ShieldedStateCoordinator {
             profile.shielded.inboxJournal[index].relationshipID = entry.relationshipID ?? profile.shielded.inboxJournal[index].relationshipID
             profile.shielded.inboxJournal[index].updatedAt = entry.updatedAt
             profile.shielded.inboxJournal[index].detail = entry.detail
+            if let resumptionMaterial = entry.resumptionMaterial {
+                profile.shielded.inboxJournal[index].resumptionMaterial = resumptionMaterial
+            }
             if entry.receivedAt < profile.shielded.inboxJournal[index].receivedAt {
                 profile.shielded.inboxJournal[index].receivedAt = entry.receivedAt
             }
@@ -771,6 +1003,29 @@ actor ShieldedStateCoordinator {
         profile.shielded.inboxJournal[index].detail = detail
     }
 
+    private func setInboxJournalResumptionMaterial(
+        in profile: inout WalletProfile,
+        id: UUID,
+        material: ShieldedInboxResumptionMaterial
+    ) {
+        guard let index = profile.shielded.inboxJournal.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        profile.shielded.inboxJournal[index].resumptionMaterial = material
+        profile.shielded.inboxJournal[index].updatedAt = Date()
+    }
+
+    private func clearInboxJournalResumptionMaterial(
+        in profile: inout WalletProfile,
+        id: UUID
+    ) {
+        guard let index = profile.shielded.inboxJournal.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        profile.shielded.inboxJournal[index].resumptionMaterial = nil
+        profile.shielded.inboxJournal[index].updatedAt = Date()
+    }
+
     private func updateInboxJournalEntries(
         in profile: inout WalletProfile,
         matching noteCommitment: Data,
@@ -781,6 +1036,7 @@ actor ShieldedStateCoordinator {
         for index in profile.shielded.inboxJournal.indices where profile.shielded.inboxJournal[index].noteCommitment == noteCommitment {
             profile.shielded.inboxJournal[index].stage = stage
             profile.shielded.inboxJournal[index].noteID = noteID
+            profile.shielded.inboxJournal[index].resumptionMaterial = nil
             profile.shielded.inboxJournal[index].updatedAt = Date()
             profile.shielded.inboxJournal[index].detail = detail
         }
@@ -812,12 +1068,12 @@ actor ShieldedStateCoordinator {
 
     private func isReplayMatch(
         profile: WalletProfile,
-        queryPlan: TagQueryPlan,
+        relationshipID: UUID?,
         tagDigest: Data,
         ciphertextDigest: Data
     ) -> Bool {
-        if let relationshipInfo = queryPlan.relationshipByTagDigest[tagDigest],
-           let relationship = profile.shielded.relationships.first(where: { $0.id == relationshipInfo.relationshipID }) {
+        if let relationshipID,
+           let relationship = profile.shielded.relationships.first(where: { $0.id == relationshipID }) {
             return relationship.acceptedIncomingTagDigests.contains(tagDigest)
                 || relationship.acceptedCiphertextDigests.contains(ciphertextDigest)
         }
@@ -828,9 +1084,9 @@ actor ShieldedStateCoordinator {
 
         return profile.shielded.inboxJournal.contains(where: {
             $0.ciphertextDigest == ciphertextDigest
-                && $0.stage != .matchReceived
-                && $0.stage != .deferred
-                && $0.stage != .failed
+                && ($0.stage == .noteInserted
+                    || $0.stage == .witnessRefreshed
+                    || $0.stage == .spendabilityClassified)
         })
     }
 

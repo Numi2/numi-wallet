@@ -319,11 +319,13 @@ struct WalletDashboardView: View {
                 }
             } else {
                 NumiFeatureButton(
-                    title: "Open Recovery Studio",
-                    subtitle: model.hasRecoveryShare ? "Review fragment custody" : "Import a sealed share",
+                    title: "Open Custody Console",
+                    subtitle: model.pendingIncomingRecoveryTransferCount > 0
+                        ? "Approve or reject the inbound delivery"
+                        : (model.hasRecoveryShare ? "Review fragment custody" : "Import a sealed share"),
                     icon: "person.crop.rectangle.stack.fill",
                     accent: NumiPalette.aqua,
-                    enabled: model.hasRecoveryShare || hasRecoveryWorkspaceText
+                    enabled: model.hasRecoveryShare || model.hasStagedRecoveryTransfer || model.pendingIncomingRecoveryTransferCount > 0
                 ) {
                     immersiveSurface = .recoveryStudio
                 }
@@ -647,16 +649,16 @@ struct WalletDashboardView: View {
     private var recoveryOverview: some View {
         NumiGlassPanel(
             eyebrow: "Recovery Overview",
-            title: model.role.isAuthority ? "Recovery stays staged, not ambient" : "Peer share stays sealed",
-            subtitle: model.role.isAuthority ? "Open the studio only when fragment work is needed." : "This device only exists for deliberate fragment custody.",
+            title: model.role.isAuthority ? "Recovery stays staged, never ambient" : "Peer custody stays sealed and inspectable",
+            subtitle: model.role.isAuthority ? "Open the console only when quorum work is needed." : "This device exists only for deliberate fragment custody.",
             icon: "person.crop.rectangle.stack.fill",
             accent: NumiPalette.aqua
         ) {
             NumiWorkspaceSummaryCard(summary: model.recoveryWorkspaceSummary)
 
             NumiFeatureButton(
-                title: "Open Recovery Studio",
-                subtitle: model.role.isAuthority ? "Prepare or restore fragments" : "Import or export a local share",
+                title: model.role.isAuthority ? "Open Recovery Console" : "Open Custody Console",
+                subtitle: model.role.isAuthority ? "Prepare or restore bounded quorum material" : "Import, export, or audit a local share",
                 icon: "person.crop.rectangle.stack.fill",
                 accent: NumiPalette.aqua,
                 enabled: true
@@ -1030,9 +1032,10 @@ struct WalletDashboardView: View {
         [
             NumiSignal(title: "Peer Trust", value: model.peerTrustStatus, icon: "checkmark.seal.fill", accent: NumiPalette.aqua),
             NumiSignal(title: "PIR Refresh", value: model.dashboard.lastPIRRefresh, icon: "clock.arrow.trianglehead.counterclockwise.rotate.90", accent: NumiPalette.mint),
-            NumiSignal(title: "Proof Queue", value: model.dashboard.proofQueueStatus, icon: "hourglass.circle.fill", accent: NumiPalette.gold),
+            NumiSignal(title: "Note Pipeline", value: notePipelineLabel, icon: "tray.full.fill", accent: NumiPalette.gold),
+            NumiSignal(title: "Receive Inbox", value: receiveInboxLabel, icon: "shippingbox.fill", accent: NumiPalette.mint),
             NumiSignal(title: "Relationships", value: model.dashboard.relationshipPosture, icon: "person.2.fill", accent: NumiPalette.aqua),
-            NumiSignal(title: "Fee Posture", value: model.dashboard.lastFeeQuote, icon: "bitcoinsign.circle.fill", accent: NumiPalette.coral),
+            NumiSignal(title: "Proof Queue", value: model.dashboard.proofQueueStatus, icon: "hourglass.circle.fill", accent: NumiPalette.coral),
             NumiSignal(title: "Spend Readiness", value: model.dashboard.payReadiness, icon: "arrow.up.forward.circle.fill", accent: NumiPalette.gold)
         ]
     }
@@ -1096,10 +1099,6 @@ struct WalletDashboardView: View {
         ]
     }
 
-    private var hasRecoveryWorkspaceText: Bool {
-        !model.recoveryShareText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     private var trimmedAlias: String {
         model.alias.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -1116,6 +1115,19 @@ struct WalletDashboardView: View {
 
     private var hiddenVaultBalanceCopy: String {
         model.dashboard.isPrivacyRedacted ? "Redacted" : "Hidden until local auth plus peer quorum"
+    }
+
+    private var notePipelineLabel: String {
+        let summary = model.dashboard.receiveSummary
+        return "D \(summary.discoveredNoteCount) | V \(summary.verifiedNoteCount) | W \(summary.witnessFreshNoteCount) | S \(summary.spendableNoteCount)"
+    }
+
+    private var receiveInboxLabel: String {
+        let summary = model.dashboard.receiveSummary
+        if summary.pendingJournalCount == 0, summary.deferredJournalCount == 0, summary.failedJournalCount == 0 {
+            return "Clear"
+        }
+        return "P \(summary.pendingJournalCount) | D \(summary.deferredJournalCount) | F \(summary.failedJournalCount)"
     }
 
     @ViewBuilder
@@ -1185,10 +1197,38 @@ struct WalletDashboardView: View {
                 role: model.role,
                 isInitialized: model.dashboard.isInitialized,
                 hasRecoveryShare: model.hasRecoveryShare,
-                workspaceText: $model.recoveryShareText,
+                hasStagedTransfer: model.hasStagedRecoveryTransfer,
+                canDispatchStagedTransfer: model.canDispatchStagedRecoveryTransfer,
+                visibleLocalPeerCount: model.visibleLocalPeerCount,
+                pendingIncomingTransferCount: model.pendingIncomingRecoveryTransferCount,
+                pendingIncomingTransferPreview: model.pendingIncomingRecoveryTransferPreview,
+                canApprovePendingIncomingTransfer: model.canApprovePendingIncomingRecoveryTransfer,
+                stagedTransferFileURL: model.stagedRecoveryTransferFileURL,
+                stagedTransferQRCodeChunks: model.stagedRecoveryTransferQRCodeChunks,
                 workspaceSummary: model.recoveryWorkspaceSummary,
+                peerTrustStatus: model.peerTrustStatus,
+                trustedPeers: model.trustLedger.peers,
+                ledgerEvents: model.trustLedger.events,
                 statusMessage: model.statusMessage,
                 onDismiss: { immersiveSurface = nil },
+                onLoadTransfer: { data, suggestedFileName in
+                    model.loadRecoveryTransferDocument(data: data, suggestedFileName: suggestedFileName)
+                },
+                onLoadTransferQRCodeImages: { assets in
+                    model.loadRecoveryTransferQRCodeImages(assets)
+                },
+                onClearTransfer: {
+                    model.clearStagedRecoveryTransfer()
+                },
+                onSendStagedTransfer: {
+                    requestPrivilegedAction(.dispatchRecoveryTransfer)
+                },
+                onApproveIncomingTransfer: {
+                    requestPrivilegedAction(.approveIncomingRecoveryTransfer)
+                },
+                onRejectIncomingTransfer: {
+                    model.rejectPendingIncomingRecoveryTransfer()
+                },
                 onPrepareRecovery: {
                     requestPrivilegedAction(.prepareRecoveryPair)
                 },
@@ -1213,6 +1253,7 @@ struct WalletDashboardView: View {
                 signals: trustLedgerSignals,
                 peers: model.trustLedger.peers,
                 events: model.trustLedger.events,
+                onRevokePeer: { model.revokePeerTrustRecord($0) },
                 onDismiss: { immersiveSurface = nil }
             )
         }
@@ -1250,10 +1291,14 @@ struct WalletDashboardView: View {
             model.sendDemoPayment(from: .day, authorizationContext: authorizationContext)
         case .sendVaultPayment:
             model.sendDemoPayment(from: .vault, authorizationContext: authorizationContext)
+        case .dispatchRecoveryTransfer:
+            model.transmitStagedRecoveryTransfer(authorizationContext: authorizationContext)
         case .prepareRecoveryPair:
             model.configureRecoveryPeers(authorizationContext: authorizationContext)
         case .recoverAuthority:
             model.recoverAuthorityFromBundle(authorizationContext: authorizationContext)
+        case .approveIncomingRecoveryTransfer:
+            model.approvePendingIncomingRecoveryTransfer(authorizationContext: authorizationContext)
         case .importPeerShare:
             model.importRecoveryShare(authorizationContext: authorizationContext)
         case .exportPeerShare:
@@ -1384,9 +1429,9 @@ struct WalletDashboardView: View {
             return "Open Peer View"
         case .custody:
             if model.role.isAuthority {
-                return "Open Recovery Studio"
+                return "Open Recovery Console"
             }
-            return "Open Recovery Studio"
+            return "Open Custody Console"
         }
     }
 
@@ -1408,9 +1453,9 @@ struct WalletDashboardView: View {
             return "Inspect the authority-only transit boundary"
         case .custody:
             if model.role.isAuthority {
-                return "Move fragment staging and recovery actions full screen"
+                return "Move quorum staging, inbox review, and re-enrollment full screen"
             }
-            return "Move fragment staging and recovery actions full screen"
+            return "Move peer custody, inbox review, and audit full screen"
         }
     }
 
@@ -1687,8 +1732,8 @@ struct NumiMacConsoleView: View {
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 188, maximum: 260), spacing: 10)], spacing: 10) {
                 NumiMacCommandButton(
-                    title: "Recovery Studio",
-                    subtitle: "Inspect or stage bounded fragment work.",
+                    title: "Recovery Console",
+                    subtitle: "Inspect approval inbox, custody state, and bounded fragment work.",
                     icon: "person.crop.rectangle.stack.fill",
                     accent: NumiPalette.aqua
                 ) {
@@ -1824,7 +1869,7 @@ struct NumiMacConsoleView: View {
                 NumiMacMetricGrid(metrics: recoveryMetrics)
 
                 NumiMacCommandButton(
-                    title: "Open Recovery Studio",
+                    title: "Open Recovery Console",
                     subtitle: model.hasRecoveryShare ? "Review or export the sealed peer share." : "Import or stage recovery material on this Mac.",
                     icon: "person.crop.rectangle.stack.fill",
                     accent: NumiPalette.aqua
@@ -1977,10 +2022,38 @@ struct NumiMacConsoleView: View {
                 role: model.role,
                 isInitialized: model.dashboard.isInitialized,
                 hasRecoveryShare: model.hasRecoveryShare,
-                workspaceText: $model.recoveryShareText,
+                hasStagedTransfer: model.hasStagedRecoveryTransfer,
+                canDispatchStagedTransfer: model.canDispatchStagedRecoveryTransfer,
+                visibleLocalPeerCount: model.visibleLocalPeerCount,
+                pendingIncomingTransferCount: model.pendingIncomingRecoveryTransferCount,
+                pendingIncomingTransferPreview: model.pendingIncomingRecoveryTransferPreview,
+                canApprovePendingIncomingTransfer: model.canApprovePendingIncomingRecoveryTransfer,
+                stagedTransferFileURL: model.stagedRecoveryTransferFileURL,
+                stagedTransferQRCodeChunks: model.stagedRecoveryTransferQRCodeChunks,
                 workspaceSummary: model.recoveryWorkspaceSummary,
+                peerTrustStatus: model.peerTrustStatus,
+                trustedPeers: model.trustLedger.peers,
+                ledgerEvents: model.trustLedger.events,
                 statusMessage: model.statusMessage,
                 onDismiss: { immersiveSurface = nil },
+                onLoadTransfer: { data, suggestedFileName in
+                    model.loadRecoveryTransferDocument(data: data, suggestedFileName: suggestedFileName)
+                },
+                onLoadTransferQRCodeImages: { assets in
+                    model.loadRecoveryTransferQRCodeImages(assets)
+                },
+                onClearTransfer: {
+                    model.clearStagedRecoveryTransfer()
+                },
+                onSendStagedTransfer: {
+                    requestPrivilegedAction(.dispatchRecoveryTransfer)
+                },
+                onApproveIncomingTransfer: {
+                    requestPrivilegedAction(.approveIncomingRecoveryTransfer)
+                },
+                onRejectIncomingTransfer: {
+                    model.rejectPendingIncomingRecoveryTransfer()
+                },
                 onPrepareRecovery: {
                     requestPrivilegedAction(.prepareRecoveryPair)
                 },
@@ -2005,6 +2078,7 @@ struct NumiMacConsoleView: View {
                 signals: trustLedgerSignals,
                 peers: model.trustLedger.peers,
                 events: model.trustLedger.events,
+                onRevokePeer: { model.revokePeerTrustRecord($0) },
                 onDismiss: { immersiveSurface = nil }
             )
         case .authorityCeremony, .vaultChamber:
@@ -2044,10 +2118,14 @@ struct NumiMacConsoleView: View {
             model.sendDemoPayment(from: .day, authorizationContext: authorizationContext)
         case .sendVaultPayment:
             model.sendDemoPayment(from: .vault, authorizationContext: authorizationContext)
+        case .dispatchRecoveryTransfer:
+            model.transmitStagedRecoveryTransfer(authorizationContext: authorizationContext)
         case .prepareRecoveryPair:
             model.configureRecoveryPeers(authorizationContext: authorizationContext)
         case .recoverAuthority:
             model.recoverAuthorityFromBundle(authorizationContext: authorizationContext)
+        case .approveIncomingRecoveryTransfer:
+            model.approvePendingIncomingRecoveryTransfer(authorizationContext: authorizationContext)
         case .importPeerShare:
             model.importRecoveryShare(authorizationContext: authorizationContext)
         case .exportPeerShare:
@@ -2173,6 +2251,7 @@ struct NumiMacConsoleView: View {
             NumiMacMetric(label: "Peer", value: session.peerName, icon: "person.crop.circle.fill", tint: peerAccent),
             NumiMacMetric(label: "Trust", value: session.stateLabel, icon: "checkmark.seal.fill", tint: peerAccent),
             NumiMacMetric(label: "Transport", value: session.transportLabel, icon: "wave.3.forward.circle.fill", tint: NumiPalette.aqua),
+            NumiMacMetric(label: "Proximity", value: session.proximityLabel, icon: "dot.radiowaves.left.and.right", tint: peerAccent),
             NumiMacMetric(label: "Expires", value: session.expiresAt.formatted(date: .omitted, time: .shortened), icon: "clock.badge.checkmark.fill", tint: NumiPalette.gold),
             NumiMacMetric(label: "Fingerprint", value: session.transcriptFingerprint, icon: "number", tint: NumiPalette.mint),
             NumiMacMetric(label: "Known Peers", value: "\(model.trustLedger.peers.count)", icon: "person.2.fill", tint: NumiPalette.aqua)
@@ -3340,6 +3419,7 @@ private struct NumiPeerTrustCard: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: horizontalSizeClass == .compact ? 122 : 140, maximum: horizontalSizeClass == .compact ? 180 : 200), spacing: 10)], spacing: 10) {
                     trustFact(label: "Peer", value: session.peerName)
                     trustFact(label: "Transport", value: session.transportLabel)
+                    trustFact(label: "Proximity", value: session.proximityLabel)
                     trustFact(label: "Fingerprint", value: session.transcriptFingerprint)
                     trustFact(label: "Expires", value: session.expiresAt.formatted(date: .omitted, time: .shortened))
                 }
@@ -3361,7 +3441,7 @@ private struct NumiPeerTrustCard: View {
         guard let session else {
             return "Vault reveal and high-consequence recovery should stay unavailable until an attested or nearby trust session is established."
         }
-        return "\(session.peerName) is currently trusted via \(session.transportLabel). This session is short-lived and should be resealed after the privileged task completes."
+        return "\(session.peerName) is currently trusted over \(session.transportLabel) using \(session.proximityLabel.lowercased()). This session is short-lived and should be resealed after the privileged task completes."
     }
 
     private var tint: Color {
@@ -3403,6 +3483,7 @@ private struct NumiTrustLedgerView: View {
     let signals: [NumiSignal]
     let peers: [TrustedPeerRecord]
     let events: [TrustLedgerEvent]
+    let onRevokePeer: (String) -> Void
     let onDismiss: () -> Void
 
     var body: some View {
@@ -3443,7 +3524,10 @@ private struct NumiTrustLedgerView: View {
                                 accent: NumiPalette.aqua
                             ) {
                                 ForEach(peers) { peer in
-                                    NumiTrustedPeerCard(peer: peer)
+                                    NumiTrustedPeerCard(
+                                        peer: peer,
+                                        onRevoke: { onRevokePeer(peer.peerDeviceID) }
+                                    )
                                 }
                             }
                         }
@@ -3532,6 +3616,7 @@ private struct NumiTrustLedgerView: View {
 private struct NumiTrustedPeerCard: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let peer: TrustedPeerRecord
+    let onRevoke: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -3566,8 +3651,31 @@ private struct NumiTrustedPeerCard: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: horizontalSizeClass == .compact ? 118 : 130, maximum: horizontalSizeClass == .compact ? 180 : 200), spacing: 10)], spacing: 10) {
                 trustFact(label: "Fingerprint", value: peer.lastTranscriptFingerprint)
                 trustFact(label: "Transport", value: transportLabel)
+                trustFact(label: "Proximity", value: peer.proximityLabel)
                 trustFact(label: "Established", value: peer.lastEstablishedAt.formatted(date: .abbreviated, time: .shortened))
                 trustFact(label: "Expires", value: peer.lastExpiresAt.formatted(date: .omitted, time: .shortened))
+            }
+
+            HStack {
+                Spacer(minLength: 0)
+
+                Button(action: onRevoke) {
+                    Label(peer.revokedAt == nil ? "Revoke Peer" : "Peer Revoked", systemImage: peer.revokedAt == nil ? "hand.raised.fill" : "hand.raised.slash.fill")
+                        .font(.system(.caption, design: .rounded).weight(.semibold))
+                        .foregroundStyle(peer.revokedAt == nil ? NumiPalette.coral : Color.white.opacity(0.52))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background {
+                            Capsule(style: .continuous)
+                                .fill(Color.white.opacity(peer.revokedAt == nil ? 0.08 : 0.04))
+                                .overlay {
+                                    Capsule(style: .continuous)
+                                        .stroke((peer.revokedAt == nil ? NumiPalette.coral : Color.white).opacity(0.18), lineWidth: 1)
+                                }
+                        }
+                }
+                .buttonStyle(.plain)
+                .disabled(peer.revokedAt != nil)
             }
         }
         .padding(16)
@@ -3683,6 +3791,8 @@ private struct NumiTrustLedgerEventRow: View {
             return NumiPalette.mint
         case .peerSessionSealed, .peerSessionExpired:
             return NumiPalette.gold
+        case .peerRevoked:
+            return NumiPalette.coral
         case .recoveryEnvelopePrepared:
             return NumiPalette.aqua
         case .recoveryEnvelopeConsumed:
@@ -3758,8 +3868,10 @@ private enum NumiPrivilegedAction: Identifiable {
     case unlockVault
     case sendDayPayment
     case sendVaultPayment
+    case dispatchRecoveryTransfer
     case prepareRecoveryPair
     case recoverAuthority
+    case approveIncomingRecoveryTransfer
     case importPeerShare
     case exportPeerShare
     case panicWipe
@@ -3774,10 +3886,14 @@ private enum NumiPrivilegedAction: Identifiable {
             return "sendDayPayment"
         case .sendVaultPayment:
             return "sendVaultPayment"
+        case .dispatchRecoveryTransfer:
+            return "dispatchRecoveryTransfer"
         case .prepareRecoveryPair:
             return "prepareRecoveryPair"
         case .recoverAuthority:
             return "recoverAuthority"
+        case .approveIncomingRecoveryTransfer:
+            return "approveIncomingRecoveryTransfer"
         case .importPeerShare:
             return "importPeerShare"
         case .exportPeerShare:
@@ -3795,7 +3911,7 @@ private enum NumiPrivilegedAction: Identifiable {
         switch self {
         case .sendDayPayment, .sendVaultPayment, .exportPeerShare, .resumePendingShieldedSend, .discardPendingShieldedSend:
             return .biometric
-        case .unlockVault, .prepareRecoveryPair, .recoverAuthority, .importPeerShare, .panicWipe:
+        case .unlockVault, .dispatchRecoveryTransfer, .prepareRecoveryPair, .recoverAuthority, .approveIncomingRecoveryTransfer, .importPeerShare, .panicWipe:
             return .deviceOwner
         }
     }
@@ -3806,10 +3922,14 @@ private enum NumiPrivilegedAction: Identifiable {
             return "Vault Chamber Entry"
         case .sendDayPayment, .sendVaultPayment:
             return "Transfer Approval"
+        case .dispatchRecoveryTransfer:
+            return "Recovery Delivery"
         case .prepareRecoveryPair:
             return "Recovery Pairing"
         case .recoverAuthority:
             return "Authority Re-enrollment"
+        case .approveIncomingRecoveryTransfer:
+            return "Recovery Delivery Approval"
         case .importPeerShare:
             return "Peer Share Import"
         case .exportPeerShare:
@@ -3831,10 +3951,14 @@ private enum NumiPrivilegedAction: Identifiable {
             return "Approve day-lane settlement"
         case .sendVaultPayment:
             return "Approve reserve-lane settlement"
+        case .dispatchRecoveryTransfer:
+            return "Approve local recovery transfer dispatch"
         case .prepareRecoveryPair:
             return "Approve local recovery pair generation"
         case .recoverAuthority:
             return "Approve authority re-enrollment"
+        case .approveIncomingRecoveryTransfer:
+            return "Approve local recovery transfer intake"
         case .importPeerShare:
             return "Approve peer share import"
         case .exportPeerShare:
@@ -3859,10 +3983,14 @@ private enum NumiPrivilegedAction: Identifiable {
             return "The daily lane still requires explicit local approval before value leaves the device."
         case .sendVaultPayment:
             return "Reserve spending remains the highest-friction path in the product, by design."
+        case .dispatchRecoveryTransfer:
+            return "Sending signed recovery material over an authenticated local session should still require a visible device-owner approval."
         case .prepareRecoveryPair:
             return "Recovery material should only be staged after a visible, local owner confirmation."
         case .recoverAuthority:
             return "Replacing the authority root is a sovereign act and must stay explicit."
+        case .approveIncomingRecoveryTransfer:
+            return "Incoming recovery material must be explicitly accepted before it enters the local recovery workspace."
         case .importPeerShare:
             return "Importing custody material should be treated as a privileged trust transition."
         case .exportPeerShare:
@@ -3882,10 +4010,14 @@ private enum NumiPrivilegedAction: Identifiable {
             return "lock.open.fill"
         case .sendDayPayment, .sendVaultPayment:
             return "paperplane.circle.fill"
+        case .dispatchRecoveryTransfer:
+            return "wave.3.left.circle.fill"
         case .prepareRecoveryPair:
             return "person.2.fill"
         case .recoverAuthority:
             return "arrow.triangle.2.circlepath.circle.fill"
+        case .approveIncomingRecoveryTransfer:
+            return "tray.and.arrow.down.fill"
         case .importPeerShare:
             return "square.and.arrow.down.fill"
         case .exportPeerShare:
@@ -3905,7 +4037,7 @@ private enum NumiPrivilegedAction: Identifiable {
             return NumiPalette.mint
         case .sendDayPayment, .sendVaultPayment:
             return NumiPalette.gold
-        case .prepareRecoveryPair, .recoverAuthority, .importPeerShare, .exportPeerShare:
+        case .dispatchRecoveryTransfer, .prepareRecoveryPair, .recoverAuthority, .approveIncomingRecoveryTransfer, .importPeerShare, .exportPeerShare:
             return NumiPalette.aqua
         case .panicWipe:
             return NumiPalette.coral
@@ -3922,10 +4054,14 @@ private enum NumiPrivilegedAction: Identifiable {
             return "Unlock Numi vault with local peer present"
         case .sendDayPayment, .sendVaultPayment:
             return "Approve Numi spend"
+        case .dispatchRecoveryTransfer:
+            return "Approve authenticated local recovery transfer delivery"
         case .prepareRecoveryPair:
             return "Prepare local-only recovery quorum"
         case .recoverAuthority:
             return "Re-enroll Numi authority from local recovery quorum"
+        case .approveIncomingRecoveryTransfer:
+            return "Approve authenticated local recovery transfer intake"
         case .importPeerShare:
             return "Approve local recovery share import"
         case .exportPeerShare:
@@ -3941,7 +4077,7 @@ private enum NumiPrivilegedAction: Identifiable {
 
     var systemPromise: String {
         switch self {
-        case .unlockVault, .prepareRecoveryPair, .recoverAuthority, .importPeerShare, .panicWipe:
+        case .unlockVault, .dispatchRecoveryTransfer, .prepareRecoveryPair, .recoverAuthority, .approveIncomingRecoveryTransfer, .importPeerShare, .panicWipe:
             return "Numi will use Apple device-owner authentication and reuse that approval for the actual vault or recovery operation."
         case .sendDayPayment, .sendVaultPayment, .exportPeerShare:
             return "Numi will use a biometric approval and reuse that authorization for the actual protected keychain read."

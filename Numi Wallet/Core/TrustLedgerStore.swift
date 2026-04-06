@@ -48,10 +48,14 @@ actor TrustLedgerStore {
             lastTranscriptFingerprint: session.transcriptFingerprint,
             lastTrustLevel: session.trustLevel,
             lastTransport: session.transport,
+            capabilities: session.capabilities,
+            lastVerifiedProximity: session.proximityEvidence,
+            nearbyVerification: session.nearbyVerification,
             appAttested: session.appAttested,
             lastEstablishedAt: session.establishedAt,
             lastExpiresAt: session.expiresAt,
-            lastSealedAt: nil
+            lastSealedAt: nil,
+            revokedAt: nil
         )
         snapshot.upsert(peer: peer)
         snapshot.prepend(
@@ -62,7 +66,7 @@ actor TrustLedgerStore {
                 peerRole: session.peerRole,
                 fingerprint: session.transcriptFingerprint,
                 summary: "\(session.peerName) trusted for \(session.peerRole.displayName)",
-                detail: "Short-lived \(session.stateLabel.lowercased()) session established over \(session.transportLabel)."
+                detail: "Short-lived \(session.stateLabel.lowercased()) session established over \(session.transportLabel) with \(session.proximityEvidence.label.lowercased()). Capabilities: \(session.capabilities.map(\.label).joined(separator: ", "))."
             )
         )
         try save(snapshot, deviceID: deviceID, role: localRole)
@@ -116,6 +120,39 @@ actor TrustLedgerStore {
                 fingerprint: envelope.trustSessionFingerprint,
                 summary: transferSummary(for: envelope, action: action),
                 detail: detail
+            )
+        )
+        try save(snapshot, deviceID: deviceID, role: localRole)
+        return snapshot
+    }
+
+    func revokePeer(
+        deviceID peerDeviceID: String,
+        reason: String,
+        deviceID: String,
+        localRole: DeviceRole
+    ) throws -> TrustLedgerSnapshot {
+        var snapshot = try load(deviceID: deviceID, role: localRole)
+        guard let peer = snapshot.peers.first(where: { $0.peerDeviceID == peerDeviceID }) else {
+            return snapshot
+        }
+
+        let revokedAt = Date()
+        snapshot.updatePeer(deviceID: peerDeviceID) { record in
+            record.revokedAt = revokedAt
+            record.lastSealedAt = revokedAt
+            record.lastExpiresAt = min(record.lastExpiresAt, revokedAt)
+        }
+        snapshot.prepend(
+            event: TrustLedgerEvent(
+                kind: .peerRevoked,
+                localRole: localRole,
+                peerName: peer.peerName,
+                peerRole: peer.peerRole,
+                fingerprint: peer.lastTranscriptFingerprint,
+                summary: "\(peer.peerName) revoked",
+                detail: reason,
+                occurredAt: revokedAt
             )
         )
         try save(snapshot, deviceID: deviceID, role: localRole)

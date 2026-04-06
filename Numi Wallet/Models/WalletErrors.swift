@@ -16,14 +16,21 @@ enum WalletError: LocalizedError {
     case descriptorUpgradeRequired
     case invalidRecoveryPackage
     case invalidRecoveryTransfer
+    case invalidRecoveryTransferDocument
+    case invalidRecoveryTransferQRCode
     case invalidPeerTrustSession
+    case invalidLocalPeerSession
+    case invalidPeerPresenceAssertion
     case peerTrustExpired
+    case localPeerUnavailable
+    case localPeerTransportUnavailable
     case proofOffloadPeerUnavailable
     case featureUnavailable(String)
     case insufficientFunds
     case missingPIRState
     case misconfiguredService(String)
     case invalidRemoteResponse(String)
+    case invalidShieldedPayload(String)
     case remoteServiceUnavailable(String)
     case invalidProofArtifact(String)
     case resumableProofPending(String)
@@ -41,7 +48,7 @@ enum WalletError: LocalizedError {
         case .vaultLocked:
             return "The vault is locked."
         case .peerPresenceRequired:
-            return "A paired peer must be locally present to unlock the vault or spend from it."
+            return "A paired peer must be locally present to unlock the vault, spend from it, or exchange peer recovery material."
         case .companionAuthenticationRejected:
             return "Spend approval requires local biometric authentication and device passcode-backed access control."
         case .biometricAuthenticationUnavailable:
@@ -61,11 +68,23 @@ enum WalletError: LocalizedError {
         case .invalidRecoveryPackage:
             return "The recovery package is invalid or incomplete."
         case .invalidRecoveryTransfer:
-            return "The recovery transfer envelope could not be verified."
+            return "The recovery transfer envelope is invalid, unsigned, or no longer bound to the required trust context."
+        case .invalidRecoveryTransferDocument:
+            return "The recovery transfer document is malformed, corrupted, or fails Numi's canonical integrity check."
+        case .invalidRecoveryTransferQRCode:
+            return "The recovery transfer QR chunk set is incomplete, corrupted, or no longer matches a canonical Numi transfer document."
         case .invalidPeerTrustSession:
             return "The peer trust session could not be verified."
+        case .invalidLocalPeerSession:
+            return "The authenticated local peer session could not be established or verified."
+        case .invalidPeerPresenceAssertion:
+            return "The peer presence assertion is invalid, expired, or no longer bound to the active trust session."
         case .peerTrustExpired:
             return "The peer trust session has expired and must be re-established."
+        case .localPeerUnavailable:
+            return "No compatible local peer endpoint is currently available for authenticated pairing."
+        case .localPeerTransportUnavailable:
+            return "The local authenticated transport is unavailable on this device right now."
         case .proofOffloadPeerUnavailable:
             return "A paired Mac proof coprocessor is not available."
         case .featureUnavailable(let feature):
@@ -78,6 +97,8 @@ enum WalletError: LocalizedError {
             return "\(service) is not configured for this build."
         case .invalidRemoteResponse(let service):
             return "\(service) returned an invalid response."
+        case .invalidShieldedPayload(let detail):
+            return "The incoming shielded payload is invalid: \(detail)"
         case .remoteServiceUnavailable(let service):
             return "\(service) is unavailable in the current configuration."
         case .invalidProofArtifact(let detail):

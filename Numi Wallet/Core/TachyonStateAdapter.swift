@@ -18,7 +18,32 @@ struct DefaultTachyonStateAdapter: TachyonStateAdapter {
         descriptor: PrivateReceiveDescriptor,
         relationshipID: UUID?
     ) throws -> TachyonDecodedNote {
-        TachyonDecodedNote(
+        guard match.recipientDescriptorID == descriptor.id else {
+            throw WalletError.invalidShieldedPayload("Matched descriptor does not align with the active receive intent.")
+        }
+        guard payload.recipientDescriptorID == descriptor.id else {
+            throw WalletError.invalidShieldedPayload("Decrypted payload targets a different receive descriptor.")
+        }
+        guard payload.noteCommitment.isEmpty == false else {
+            throw WalletError.invalidShieldedPayload("Missing note commitment.")
+        }
+        guard payload.nullifier.isEmpty == false else {
+            throw WalletError.invalidShieldedPayload("Missing nullifier.")
+        }
+        guard payload.amount.minorUnits > 0 else {
+            throw WalletError.invalidShieldedPayload("Received amount must be positive.")
+        }
+        guard payload.amount.currencyCode == "NUMI" else {
+            throw WalletError.invalidShieldedPayload("Received amount uses an unsupported asset code.")
+        }
+        guard payload.createdAt.timeIntervalSince1970 > 0 else {
+            throw WalletError.invalidShieldedPayload("Missing creation timestamp.")
+        }
+        guard payload.senderIntroductionEncapsulatedKey == match.senderIntroductionEncapsulatedKey else {
+            throw WalletError.invalidShieldedPayload("Introduction material does not match the discovery envelope.")
+        }
+
+        return TachyonDecodedNote(
             noteCommitment: payload.noteCommitment,
             nullifier: payload.nullifier,
             amount: payload.amount,

@@ -4,6 +4,7 @@ enum TrustLedgerEventKind: String, Codable, Sendable {
     case peerSessionEstablished
     case peerSessionSealed
     case peerSessionExpired
+    case peerRevoked
     case recoveryEnvelopePrepared
     case recoveryEnvelopeConsumed
 
@@ -15,6 +16,8 @@ enum TrustLedgerEventKind: String, Codable, Sendable {
             return "Trust Session Sealed"
         case .peerSessionExpired:
             return "Trust Session Expired"
+        case .peerRevoked:
+            return "Peer Revoked"
         case .recoveryEnvelopePrepared:
             return "Recovery Transfer Prepared"
         case .recoveryEnvelopeConsumed:
@@ -30,6 +33,8 @@ enum TrustLedgerEventKind: String, Codable, Sendable {
             return "lock.fill"
         case .peerSessionExpired:
             return "clock.badge.exclamationmark.fill"
+        case .peerRevoked:
+            return "hand.raised.fill"
         case .recoveryEnvelopePrepared:
             return "square.and.arrow.up.fill"
         case .recoveryEnvelopeConsumed:
@@ -52,18 +57,26 @@ struct TrustedPeerRecord: Identifiable, Codable, Sendable {
     var lastTranscriptFingerprint: String
     var lastTrustLevel: PeerTrustLevel
     var lastTransport: PairingTransport
+    var capabilities: [PeerSessionCapability]
+    var lastVerifiedProximity: PeerProximityEvidence
+    var nearbyVerification: NearbyPeerVerification?
     var appAttested: Bool
     var lastEstablishedAt: Date
     var lastExpiresAt: Date
     var lastSealedAt: Date?
+    var revokedAt: Date?
 
     var isCurrentTrust: Bool {
+        guard revokedAt == nil else { return false }
         guard lastExpiresAt > Date() else { return false }
         guard let lastSealedAt else { return true }
         return lastSealedAt < lastEstablishedAt
     }
 
     var statusLabel: String {
+        if revokedAt != nil {
+            return "Revoked"
+        }
         if isCurrentTrust {
             switch lastTrustLevel {
             case .attestedLocal:
@@ -76,6 +89,15 @@ struct TrustedPeerRecord: Identifiable, Codable, Sendable {
             return "Expired"
         }
         return "Sealed"
+    }
+
+    var proximityLabel: String {
+        switch lastVerifiedProximity {
+        case .authenticatedLocalChannel:
+            return lastVerifiedProximity.label
+        case .nearbyInteraction:
+            return nearbyVerification?.label ?? lastVerifiedProximity.label
+        }
     }
 }
 

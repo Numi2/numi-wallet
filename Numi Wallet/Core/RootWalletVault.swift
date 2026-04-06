@@ -191,22 +191,32 @@ actor RootWalletVault {
         return profile
     }
 
-    func unlockVault(peerPresent: Bool, privacyExposureDetected: Bool) async throws -> VaultWalletSnapshot {
+    func unlockVault(
+        peerTrustSession: PeerTrustSession?,
+        peerPresenceAssertion: PeerPresenceAssertion?,
+        privacyExposureDetected: Bool
+    ) async throws -> VaultWalletSnapshot {
         let context = try await authClient.authenticateDeviceOwner(reason: "Unlock Numi vault with local peer present")
         return try await unlockVault(
-            peerPresent: peerPresent,
+            peerTrustSession: peerTrustSession,
+            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: context
         )
     }
 
     func unlockVault(
-        peerPresent: Bool,
+        peerTrustSession: PeerTrustSession?,
+        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool,
         authorizationContext context: LAContext
     ) async throws -> VaultWalletSnapshot {
         guard role.isAuthority else { throw WalletError.authorityOnly }
         let profile = try await requireInitializedProfile()
+        let peerPresent = try await validatedPeerPresence(
+            session: peerTrustSession,
+            assertion: peerPresenceAssertion
+        )
         try policyEngine.requireVaultVisibility(
             policy: profile.policy,
             peerPresent: peerPresent,
@@ -236,7 +246,8 @@ actor RootWalletVault {
 
     func rotateDescriptor(
         tier: WalletTier,
-        peerPresent: Bool,
+        peerTrustSession: PeerTrustSession?,
+        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool
     ) async throws -> PrivateReceiveDescriptor {
         var profile = try await requireInitializedProfile()
@@ -270,6 +281,10 @@ actor RootWalletVault {
             return material.descriptor
 
         case .vault:
+            let peerPresent = try await validatedPeerPresence(
+                session: peerTrustSession,
+                assertion: peerPresenceAssertion
+            )
             try policyEngine.requireVaultVisibility(
                 policy: profile.policy,
                 peerPresent: peerPresent,
@@ -345,13 +360,15 @@ actor RootWalletVault {
 
     func authorizeSpend(
         _ draft: SpendDraft,
-        peerPresent: Bool,
+        peerTrustSession: PeerTrustSession?,
+        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool
     ) async throws -> SpendAuthorization {
         let biometricContext = try await authClient.authenticateBiometric(reason: "Approve Numi spend")
         return try await authorizeSpend(
             draft,
-            peerPresent: peerPresent,
+            peerTrustSession: peerTrustSession,
+            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: biometricContext
         )
@@ -359,12 +376,17 @@ actor RootWalletVault {
 
     func authorizeSpend(
         _ draft: SpendDraft,
-        peerPresent: Bool,
+        peerTrustSession: PeerTrustSession?,
+        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool,
         authorizationContext biometricContext: LAContext
     ) async throws -> SpendAuthorization {
         let profile = try await requireInitializedProfile()
         try await keyManager.validateSpendAuthorization(using: biometricContext)
+        let peerPresent = try await validatedPeerPresence(
+            session: peerTrustSession,
+            assertion: peerPresenceAssertion
+        )
         try policyEngine.requireSpend(
             from: draft.tier,
             policy: profile.policy,
@@ -424,14 +446,16 @@ actor RootWalletVault {
 
     func submitSpend(
         _ draft: SpendDraft,
-        peerPresent: Bool,
+        peerTrustSession: PeerTrustSession?,
+        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool,
         descriptor: PrivateReceiveDescriptor
     ) async throws -> RelaySubmissionReceipt {
         let biometricContext = try await authClient.authenticateBiometric(reason: "Approve Numi spend")
         return try await submitSpend(
             draft,
-            peerPresent: peerPresent,
+            peerTrustSession: peerTrustSession,
+            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             descriptor: descriptor,
             authorizationContext: biometricContext
@@ -440,7 +464,8 @@ actor RootWalletVault {
 
     func submitSpend(
         _ draft: SpendDraft,
-        peerPresent: Bool,
+        peerTrustSession: PeerTrustSession?,
+        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool,
         descriptor: PrivateReceiveDescriptor,
         authorizationContext biometricContext: LAContext
@@ -554,7 +579,8 @@ actor RootWalletVault {
         profile = try await requireInitializedProfile()
         let authorization = try await authorizeSpend(
             draft,
-            peerPresent: peerPresent,
+            peerTrustSession: peerTrustSession,
+            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: biometricContext
         )
@@ -837,14 +863,16 @@ actor RootWalletVault {
     }
 
     func resumePendingShieldedSend(
-        peerPresent: Bool,
+        peerTrustSession: PeerTrustSession?,
+        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool
     ) async throws -> RelaySubmissionReceipt {
         let biometricContext = try await authClient.authenticateBiometric(reason: "Approve resumed Numi spend")
         let checkpointID = try await nextActionableProofCheckpointID()
         return try await resumePendingShieldedSend(
             checkpointID: checkpointID,
-            peerPresent: peerPresent,
+            peerTrustSession: peerTrustSession,
+            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: biometricContext
         )
@@ -852,13 +880,15 @@ actor RootWalletVault {
 
     func resumePendingShieldedSend(
         checkpointID: UUID,
-        peerPresent: Bool,
+        peerTrustSession: PeerTrustSession?,
+        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool
     ) async throws -> RelaySubmissionReceipt {
         let biometricContext = try await authClient.authenticateBiometric(reason: "Approve resumed Numi spend")
         return try await resumePendingShieldedSend(
             checkpointID: checkpointID,
-            peerPresent: peerPresent,
+            peerTrustSession: peerTrustSession,
+            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: biometricContext
         )
@@ -866,7 +896,8 @@ actor RootWalletVault {
 
     func resumePendingShieldedSend(
         checkpointID: UUID,
-        peerPresent: Bool,
+        peerTrustSession: PeerTrustSession?,
+        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool,
         authorizationContext biometricContext: LAContext
     ) async throws -> RelaySubmissionReceipt {
@@ -932,7 +963,8 @@ actor RootWalletVault {
         let capsule = profile.shielded.pendingProofs[checkpointIndex].capsule
         let authorization = try await authorizeSpend(
             capsule.draft,
-            peerPresent: peerPresent,
+            peerTrustSession: peerTrustSession,
+            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: biometricContext
         )
@@ -1097,6 +1129,29 @@ actor RootWalletVault {
         try? await persist(profile)
     }
 
+    private func validatedPeerPresence(
+        session: PeerTrustSession?,
+        assertion: PeerPresenceAssertion?
+    ) async throws -> Bool {
+        guard let session else { return false }
+        guard session.isActive else { return false }
+        guard let assertion else { return false }
+        guard assertion.isActive, assertion.matches(session: session) else {
+            throw WalletError.invalidPeerPresenceAssertion
+        }
+
+        let payload = try JSONEncoder().encode(assertion.unsignedAssertion())
+        let isValid = try await keyManager.verifyPeerSignature(
+            signature: assertion.signature,
+            payload: payload,
+            publicKey: session.peerVerifyingKey
+        )
+        guard isValid else {
+            throw WalletError.invalidPeerPresenceAssertion
+        }
+        return true
+    }
+
     func dashboard(
         peerPresent: Bool,
         lastProofVenue: String,
@@ -1130,6 +1185,7 @@ actor RootWalletVault {
             ? spendReadinessLabel(for: profile)
             : "Inactive for current coin profile"
         let relationshipPosture = relationshipPostureLabel(for: profile.shielded.relationships)
+        let receiveSummary = receiveSummary(for: profile.shielded)
         let proofQueueStatus = proofQueueStatusLabel(for: profile.shielded.pendingProofs)
         let pendingShieldedSends = pendingShieldedSendSummaries(for: profile)
         let lastFeeQuote = configuration.supportsDynamicFeeMarkets
@@ -1155,6 +1211,7 @@ actor RootWalletVault {
             lastPIRRefresh: lastRefresh,
             payReadiness: payReadiness,
             relationshipPosture: relationshipPosture,
+            receiveSummary: receiveSummary,
             lastFeeQuote: lastFeeQuote,
             trackedTagRelationships: profile.shielded.relationships.count,
             trackedNotes: profile.shielded.notes.count
@@ -1199,6 +1256,20 @@ actor RootWalletVault {
             segments.append("Revoked \(revokedCount)")
         }
         return segments.joined(separator: " | ")
+    }
+
+    private func receiveSummary(for shielded: ShieldedWalletSnapshot) -> ShieldedReceiveStatusSummary {
+        ShieldedReceiveStatusSummary(
+            discoveredNoteCount: shielded.notes.filter { $0.readinessState == .discovered }.count,
+            verifiedNoteCount: shielded.notes.filter { $0.readinessState == .verified }.count,
+            witnessFreshNoteCount: shielded.notes.filter { $0.readinessState == .witnessFresh }.count,
+            spendableNoteCount: shielded.notes.filter(\.isSpendable).count,
+            pendingJournalCount: shielded.inboxJournal.filter {
+                $0.stage == .matchReceived || $0.stage == .payloadDecrypted || $0.stage == .payloadValidated
+            }.count,
+            deferredJournalCount: shielded.inboxJournal.filter { $0.stage == .deferred }.count,
+            failedJournalCount: shielded.inboxJournal.filter { $0.stage == .failed }.count
+        )
     }
 
     private func proofQueueStatusLabel(for checkpoints: [TachyonProofCheckpoint]) -> String {

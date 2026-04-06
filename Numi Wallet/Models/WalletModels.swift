@@ -654,9 +654,14 @@ struct PairingInvitation: Codable, Sendable {
     var id: UUID
     var host: String
     var port: UInt16
+    var deviceID: String
+    var deviceRole: DeviceRole
     var bootstrapCode: String
     var transport: PairingTransport
+    var supportsNearbyInteraction: Bool
+    var capabilities: [PeerSessionCapability]
     var verifyingKey: Data
+    var sessionBootstrapPublicKey: Data
     var issuedAt: Date
 }
 
@@ -716,6 +721,26 @@ struct PendingShieldedSendSummary: Identifiable, Sendable {
     var canDiscard: Bool
 }
 
+struct ShieldedReceiveStatusSummary: Sendable {
+    var discoveredNoteCount: Int
+    var verifiedNoteCount: Int
+    var witnessFreshNoteCount: Int
+    var spendableNoteCount: Int
+    var pendingJournalCount: Int
+    var deferredJournalCount: Int
+    var failedJournalCount: Int
+
+    static let empty = ShieldedReceiveStatusSummary(
+        discoveredNoteCount: 0,
+        verifiedNoteCount: 0,
+        witnessFreshNoteCount: 0,
+        spendableNoteCount: 0,
+        pendingJournalCount: 0,
+        deferredJournalCount: 0,
+        failedJournalCount: 0
+    )
+}
+
 struct WalletDashboardState: Sendable {
     var role: DeviceRole
     var isInitialized: Bool
@@ -734,6 +759,7 @@ struct WalletDashboardState: Sendable {
     var lastPIRRefresh: String
     var payReadiness: String
     var relationshipPosture: String
+    var receiveSummary: ShieldedReceiveStatusSummary
     var lastFeeQuote: String
     var trackedTagRelationships: Int
     var trackedNotes: Int
@@ -757,6 +783,7 @@ struct WalletDashboardState: Sendable {
             lastPIRRefresh: "Never",
             payReadiness: "Not ready",
             relationshipPosture: "No tracked relationships",
+            receiveSummary: .empty,
             lastFeeQuote: "No fee quote",
             trackedTagRelationships: 0,
             trackedNotes: 0

@@ -2,14 +2,63 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Numi Recovery Transfer</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>numi.recovery-transfer+json</string>
+			</array>
+		</dict>
+	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).pir-refresh</string>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).tachyon-proof.*</string>
 	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<false/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_numipeer._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Numi uses the local network only to discover your own Apple devices for authenticated peer presence and recovery transfer sessions.</string>
+	<key>NSNearbyInteractionUsageDescription</key>
+	<string>Numi uses Nearby Interaction only to strengthen local peer trust with precision co-presence evidence during vault and recovery approval sessions.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Numi Recovery Transfer</string>
+			<key>UTTypeIdentifier</key>
+			<string>numi.recovery-transfer+json</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>numi-transfer</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.numi.recovery-transfer+json</string>
+				</array>
+			</dict>
+		</dict>
 	</array>
 </dict>
 </plist>

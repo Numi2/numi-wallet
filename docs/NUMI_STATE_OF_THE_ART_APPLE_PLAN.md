@@ -1,6 +1,6 @@
 # Numi State Of The Art Apple Plan
 
-Last updated: April 5, 2026
+Last updated: April 6, 2026
 
 See also:
 
@@ -132,20 +132,22 @@ File:
 
 - `Numi Wallet/Models/WalletExperienceModels.swift`
 
-### 3. Recovery workspace inspection
+### 3. Signed recovery transfer lane
 
-The recovery workspace now has a typed inspection layer that parses staged text into:
+The recovery studio no longer uses an editable JSON workspace as its normal flow.
 
-- empty workspace
-- single peer share
-- quorum bundle
-- invalid payload
+It now stages signed recovery transfer files and inspects them as structured payloads:
+
+- no staged transfer
+- signed peer-share transfer
+- signed authority recovery transfer
+- legacy or invalid payload
 
 Why this matters:
 
 - the UI can explain what is staged before the user acts
-- recovery actions can be enabled based on payload truth rather than text presence alone
-- this is a direct step away from raw plaintext handling toward a bounded recovery product
+- recovery actions are enabled based on signed payload truth rather than text presence
+- users now import, share, and clear bounded transfer files instead of editing raw recovery material inline
 
 Files:
 
@@ -185,6 +187,103 @@ Files:
 - `Numi Wallet/Models/RecoveryTransferModels.swift`
 - `Numi Wallet/Core/RecoveryTransferCoordinator.swift`
 - `Numi Wallet/App/WalletAppModel.swift`
+- `Numi Wallet/UI/WalletDashboardView.swift`
+
+### 9. Authenticated local device graph over `Network.framework`
+
+Numi now has a real local transport substrate rather than only a transcript model:
+
+- Bonjour-backed local listener and browser over `Network.framework`
+- signed handshake hello and acknowledgement frames
+- short-lived local session tickets with X-Wing HPKE bootstrapped session secret delivery
+- trust establishment that now consumes authenticated local session artifacts rather than fabricating peer trust inside the UI
+- role, capability, and proximity evidence now recorded into the sealed trust ledger
+
+Files:
+
+- `Numi Wallet/Models/LocalPeerTransportModels.swift`
+- `Numi Wallet/Pairing/AuthenticatedLocalPeerTransport.swift`
+- `Numi Wallet/Pairing/PairingChannel.swift`
+- `Numi Wallet/Pairing/PeerTrustCoordinator.swift`
+- `Numi Wallet/App/WalletAppModel.swift`
+- `Numi Wallet/Core/TrustLedgerStore.swift`
+- `Numi Wallet/Models/TrustLedgerModels.swift`
+- `Config/NumiWallet-Info.plist`
+
+### 10. Nearby Interaction trust upgrade over authenticated local sessions
+
+The local device graph now has a real spatial trust-upgrade path instead of treating hardware capability as proof:
+
+- pairing invitations advertise Nearby Interaction support separately from transport
+- authenticated local sessions remain honestly labeled as `Network.framework` sessions
+- peers exchange Nearby Interaction discovery tokens over the sealed session channel
+- successful precision ranging upgrades a live session to nearby-verified trust with measured proximity details
+- the trust ledger and operator surfaces now display proximity evidence separately from transport
+
+Why this matters:
+
+- the transport record no longer lies about how trust was established
+- iPhone and iPad peers can now contribute real co-presence evidence before vault or recovery work proceeds
+- the trust ledger now distinguishes authenticated channel trust from spatially verified trust, which is the correct long-term audit model
+
+Files:
+
+- `Numi Wallet/Models/PeerTrustModels.swift`
+- `Numi Wallet/Models/LocalPeerTransportModels.swift`
+- `Numi Wallet/Models/TrustLedgerModels.swift`
+- `Numi Wallet/Pairing/AuthenticatedLocalPeerTransport.swift`
+- `Numi Wallet/Pairing/PairingChannel.swift`
+- `Numi Wallet/Pairing/PeerTrustCoordinator.swift`
+- `Numi Wallet/App/WalletAppModel.swift`
+- `Numi Wallet/UI/WalletDashboardView.swift`
+- `Config/NumiWallet-Info.plist`
+
+### 11. Explicit approval inbox for authenticated local recovery delivery
+
+Authenticated local recovery transport is no longer an ambient handoff.
+
+It now adds:
+
+- a pending-delivery inbox in Recovery Studio before inbound custody material enters the workspace
+- explicit device-owner approval for authenticated local transfer dispatch and inbound delivery intake
+- transport-side enforcement that incoming recovery documents match the authenticated sender key and active trust-session fingerprint for peer-bound delivery
+- duplicate suppression so a replayed local packet does not silently flood the inbox
+
+Why this matters:
+
+- sender and recipient approval are now distinct product moments instead of an invisible transport side effect
+- custody material does not enter the local workspace until the recipient explicitly accepts it
+- the authenticated local session is now part of the security boundary, not just the transport path
+
+Files:
+
+- `Numi Wallet/Models/RecoveryTransferModels.swift`
+- `Numi Wallet/Pairing/AuthenticatedLocalPeerTransport.swift`
+- `Numi Wallet/App/WalletAppModel.swift`
+- `Numi Wallet/UI/NumiImmersiveSurfaces.swift`
+- `Numi Wallet/UI/WalletDashboardView.swift`
+- `Numi Wallet/Models/WalletExperienceModels.swift`
+
+### 12. Role-specific authority recovery and peer custody consoles
+
+The old generic Recovery Studio is now split by device role even though it still routes through one immersive surface entry point.
+
+It now adds:
+
+- an authority recovery console that emphasizes quorum posture, inbound approval, peer-mesh readiness, and re-enrollment audit
+- peer custody consoles that emphasize sealed-share custody, inbound delivery approval, and local transfer history
+- dashboard and Mac-console entry points that now speak in terms of recovery and custody consoles rather than one generic studio
+- trust-ledger recovery history surfaced directly inside the recovery console instead of only in the separate ledger view
+
+Why this matters:
+
+- the authority iPhone, recovery iPad, and recovery Mac no longer present the same recovery product language
+- recovery now reads as a device graph with different operator responsibilities rather than one shared workspace
+- the recovery lane is closer to a production product surface and less like a transitional staging area
+
+Files:
+
+- `Numi Wallet/UI/NumiImmersiveSurfaces.swift`
 - `Numi Wallet/UI/WalletDashboardView.swift`
 
 ### 6. Apple security posture telemetry
@@ -230,6 +329,7 @@ It also adds a sealed local trust ledger that records:
 - session establish and seal events
 - signed recovery-transfer preparation
 - signed recovery-transfer consumption
+- local peer revocation and active-session seal decisions
 
 Why this matters:
 
@@ -357,7 +457,7 @@ Target: next major implementation cycle
 
 1. Replace remaining raw recovery text handling with bounded transfer surfaces.
    - Prefer authenticated local transfer between Apple devices.
-   - The text editor should become a last-resort debug bridge, not a normal product flow.
+   - The shipping surface should stay on signed transfer files and explicit share/import flows until the direct local channel lands.
 2. Keep iPhone privileged entry points on `LAContext` and Keychain-gated system sheets.
    - Vault chamber entry.
    - Recovery import and export approval.
@@ -375,7 +475,7 @@ Target: next major implementation cycle
 ### Phase B: Build The Real Apple Device Graph
 
 1. Implement authenticated local peer sessions with `Network.framework`.
-2. Layer `NearbyInteraction` on top for higher-confidence co-presence and precision.
+2. Harden the Nearby Interaction upgrade path with production operator UX, lifecycle coaching, and failure handling.
 3. Introduce a peer-trust record model with:
    - peer device identity
    - attestation state
@@ -438,13 +538,12 @@ Target: next major implementation cycle
 
 These should be the next implementation decisions, in order:
 
-1. Replace the remaining transitional workspace with authenticated local transfer over `Network.framework`, plus explicit sender and recipient approval surfaces.
-2. Layer real `NearbyInteraction` session management and precision evidence onto the peer-trust session model.
-3. Refactor the UI into role-specific root views.
-4. Add trust records, peer administration, and revocation surfaces.
-5. Keep biometric entry points on `LAContext` and Keychain-gated system sheets, with SwiftUI only framing the trust state before system authentication.
-6. Signed coin manifest is now the runtime authority for coin capabilities and service topology. Keep it pinned to a bundled ML-DSA-87 trust root and regenerate it only through the offline signing path.
-7. Split proving, remote-service policy, and coin-capability policy into clearer subsystems.
+1. Implement the real receive scanning and note ingestion path.
+2. Keep biometric entry points on `LAContext` and Keychain-gated system sheets, with SwiftUI only framing the trust state before system authentication.
+3. Signed coin manifest is now the runtime authority for coin capabilities and service topology. Keep it pinned to a bundled ML-DSA-87 trust root and regenerate it only through the offline signing path.
+4. Split proving, remote-service policy, and coin-capability policy into clearer subsystems.
+5. Deepen iPad and Mac peer administration, diagnostics, and recovery-review tooling beyond the current custody consoles.
+6. Add richer operator workflows for revoked-peer recovery, re-enrollment, and audit review.
 
 ## Recommended Codebase Shape
 

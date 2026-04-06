@@ -2,49 +2,45 @@ import Foundation
 
 actor PeerTrustCoordinator {
     private let pairingChannel: PairingChannel
-    private let localDeviceID: String
     private var activeSession: PeerTrustSession?
 
-    init(pairingChannel: PairingChannel, localDeviceID: String) {
+    init(pairingChannel: PairingChannel) {
         self.pairingChannel = pairingChannel
-        self.localDeviceID = localDeviceID
     }
 
-    func establishSession(with peerKind: PeerKind, ttl: TimeInterval = 5 * 60) async throws -> PeerTrustSession {
-        let invitation = try await pairingChannel.makeInvitation()
-        let peerRole: DeviceRole = switch peerKind {
-        case .mac:
-            .recoveryMac
-        case .pad:
-            .recoveryPad
-        }
-        let transcript = try await pairingChannel.makeSessionTranscript(
-            for: invitation,
-            peerDeviceID: peerDeviceID(for: peerKind),
-            peerRole: peerRole,
-            ttl: ttl
-        )
-
-        guard try await pairingChannel.verify(transcript, for: invitation) else {
+    func establishSession(from localSession: AuthenticatedLocalPeerSession) async throws -> PeerTrustSession {
+        guard localSession.isActive,
+              let peerKind = localSession.remotePeerKind else {
             throw WalletError.invalidPeerTrustSession
         }
 
         let session = PeerTrustSession(
-            id: transcript.sessionID,
-            peerName: peerName(for: peerKind),
+            id: localSession.id,
+            peerName: localSession.remotePeerName,
             peerKind: peerKind,
-            peerRole: peerRole,
-            peerDeviceID: transcript.peerDeviceID,
-            invitationID: invitation.id,
-            transcriptFingerprint: transcript.fingerprint,
-            transport: invitation.transport,
-            trustLevel: invitation.transport == .nearbyInteraction && peerKind == .pad ? .nearbyVerified : .attestedLocal,
-            appAttested: transcript.appAttestation != nil,
-            establishedAt: transcript.createdAt,
-            expiresAt: transcript.expiresAt
+            peerRole: localSession.remoteRole,
+            peerDeviceID: localSession.remoteDeviceID,
+            peerVerifyingKey: localSession.remoteVerifyingKey,
+            invitationID: localSession.remoteInvitationID,
+            transcriptFingerprint: localSession.transcriptFingerprint,
+            transport: localSession.transport,
+            capabilities: localSession.remoteCapabilities,
+            proximityEvidence: localSession.proximityEvidence,
+            trustLevel: localSession.trustLevel,
+            nearbyVerification: localSession.nearbyVerification,
+            appAttested: localSession.remoteAppAttested,
+            establishedAt: localSession.establishedAt,
+            expiresAt: localSession.expiresAt
         )
         activeSession = session
         return session
+    }
+
+    func issuePresenceAssertion(ttl: TimeInterval = 90) async throws -> PeerPresenceAssertion {
+        guard let session = currentSession() else {
+            throw WalletError.peerPresenceRequired
+        }
+        return try await pairingChannel.makePresenceAssertion(for: session, ttl: ttl)
     }
 
     func currentSession() -> PeerTrustSession? {
@@ -58,23 +54,5 @@ actor PeerTrustCoordinator {
 
     func clearSession() {
         activeSession = nil
-    }
-
-    private func peerName(for kind: PeerKind) -> String {
-        switch kind {
-        case .mac:
-            return "Mac Sovereign Peer"
-        case .pad:
-            return "iPad Recovery Peer"
-        }
-    }
-
-    private func peerDeviceID(for kind: PeerKind) -> String {
-        switch kind {
-        case .mac:
-            return "\(localDeviceID)-mac-peer"
-        case .pad:
-            return "\(localDeviceID)-pad-peer"
-        }
     }
 }

@@ -1,6 +1,6 @@
 # Numi Wallet Architecture And Roadmap
 
-Last updated: April 5, 2026
+Last updated: April 6, 2026
 
 See also:
 
@@ -168,8 +168,12 @@ The current repo is a prototype shell with meaningful security structure already
 - Role-scoped and device-scoped canonical wallet state files.
 - State integrity sealing to reject tampered wallet state.
 - Short-lived peer-trust sessions with attested transcript fingerprints and expiry windows.
+- Authenticated `Network.framework` local peer transport with Bonjour discovery, signed handshake frames, and short-lived session tickets bound to invitation identity.
+- Nearby Interaction token exchange over authenticated local sessions, upgrading attested trust into measured co-presence when both peers support precision ranging.
 - Signed, role-bounded recovery transfer envelopes for peer-share and authority-bundle staging.
-- Sealed local trust-ledger persistence for peer records and signed recovery-transfer audit history.
+- Explicit sender and recipient approval inbox for authenticated local recovery-transfer delivery, with transport-side sender-key, trust-fingerprint, and replay enforcement.
+- Role-specific authority recovery and peer custody consoles that render recovery posture, peer mesh state, and local audit history differently by device role.
+- Sealed local trust-ledger persistence for peer records, revocation controls, and signed recovery-transfer audit history.
 - App Attest-aware discovery and relay clients.
 - Ephemeral URL session configuration for remote traffic.
 - `XWing` HPKE relay payload encryption for descriptor delivery.
@@ -186,7 +190,7 @@ The current repo is a prototype shell with meaningful security structure already
 ### Partially Implemented
 
 - Pairing invitation and attested transcript model.
-- Peer trust is modeled and enforced locally, but still needs real `Network.framework` session transport and Nearby Interaction evidence.
+- Peer trust now rides on authenticated local `Network.framework` session tickets and can be upgraded by Nearby Interaction evidence, but still needs deeper role-specific peer UX, richer audit tooling, and broader recovery administration flows around that transport.
 - Role-specific roots exist at app entry, but the deeper surfaces still need to diverge further by device role.
 - Metal-backed proving prototype.
 - Recovery package generation and re-enrollment.
@@ -196,12 +200,11 @@ The current repo is a prototype shell with meaningful security structure already
 
 ### Not Yet Implemented
 
-- Real `Network.framework` local pairing service and authenticated peer sessions.
 - Production coin adapters for real settlement rails.
 - Real receive decryption, note parsing, and witness construction against live protocol specs.
 - Real zero-knowledge proving backend for fee commitments and spends.
 - Mac diagnostics-grade peer workflows for proof queue visibility, recovery administration, and audit support.
-- Production-grade recovery UX that fully eliminates the transitional workspace.
+- Fully dedicated re-enrollment and audit surfaces beyond the current role-specific recovery consoles.
 - Dedicated iPad and Mac peer UX tuned to their roles.
 - Dedicated Apple Watch companion UX tuned to its sentinel role.
 
@@ -336,6 +339,7 @@ The current plaintext recovery workspace is a prototype convenience and should n
 Shipping UX should replace generic text editing with:
 
 - Peer-to-peer transfer over local authenticated channels.
+- Signed transfer-file import and share surfaces as the bounded interim product path.
 - QR chunk export/import for human-assisted transfer.
 - Explicit role-specific screens on iPad and Mac for “hold fragment”, “approve re-enrollment”, and “confirm presence”.
 
@@ -587,11 +591,11 @@ Exit criteria:
 
 If the team executes only the highest-leverage next steps, they should be:
 
-1. Replace `peerPresent` with cryptographic peer-presence assertions.
-2. Delete the recovery `TextEditor` flow and replace it with bounded transfer paths.
-3. Build the local `Network.framework` session layer for pairing, approval, and presence.
-4. Implement the real receive scanning and note ingestion path.
-5. Build the real spend/proof pipeline and the iPhone continued-processing proof ladder.
+1. Implement the real receive scanning and note ingestion path.
+2. Build the real spend/proof pipeline and the iPhone continued-processing proof ladder.
+3. Deepen iPad and Mac peer administration, diagnostics, and recovery-review tooling.
+4. Add a formal cryptography inventory plus production verification coverage for transport, recovery, and vault policy boundaries.
+5. Replace the remaining generic re-enrollment flow with fully dedicated authority ceremony and audit surfaces.
 
 ## Definition Of Done For Numi 1.0
 
