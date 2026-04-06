@@ -20,7 +20,6 @@ enum WalletError: LocalizedError {
     case invalidRecoveryTransferQRCode
     case invalidPeerTrustSession
     case invalidLocalPeerSession
-    case invalidPeerPresenceAssertion
     case peerTrustExpired
     case localPeerUnavailable
     case localPeerTransportUnavailable
@@ -77,8 +76,6 @@ enum WalletError: LocalizedError {
             return "The peer trust session could not be verified."
         case .invalidLocalPeerSession:
             return "The authenticated local peer session could not be established or verified."
-        case .invalidPeerPresenceAssertion:
-            return "The peer presence assertion is invalid, expired, or no longer bound to the active trust session."
         case .peerTrustExpired:
             return "The peer trust session has expired and must be re-established."
         case .localPeerUnavailable:

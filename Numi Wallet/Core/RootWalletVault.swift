@@ -193,13 +193,11 @@ actor RootWalletVault {
 
     func unlockVault(
         peerTrustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool
     ) async throws -> VaultWalletSnapshot {
         let context = try await authClient.authenticateDeviceOwner(reason: "Unlock Numi vault with local peer present")
         return try await unlockVault(
             peerTrustSession: peerTrustSession,
-            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: context
         )
@@ -207,16 +205,12 @@ actor RootWalletVault {
 
     func unlockVault(
         peerTrustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool,
         authorizationContext context: LAContext
     ) async throws -> VaultWalletSnapshot {
         guard role.isAuthority else { throw WalletError.authorityOnly }
         let profile = try await requireInitializedProfile()
-        let peerPresent = try await validatedPeerPresence(
-            session: peerTrustSession,
-            assertion: peerPresenceAssertion
-        )
+        let peerPresent = try validatedPeerPresence(session: peerTrustSession)
         try policyEngine.requireVaultVisibility(
             policy: profile.policy,
             peerPresent: peerPresent,
@@ -247,7 +241,6 @@ actor RootWalletVault {
     func rotateDescriptor(
         tier: WalletTier,
         peerTrustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool
     ) async throws -> PrivateReceiveDescriptor {
         var profile = try await requireInitializedProfile()
@@ -281,10 +274,7 @@ actor RootWalletVault {
             return material.descriptor
 
         case .vault:
-            let peerPresent = try await validatedPeerPresence(
-                session: peerTrustSession,
-                assertion: peerPresenceAssertion
-            )
+            let peerPresent = try validatedPeerPresence(session: peerTrustSession)
             try policyEngine.requireVaultVisibility(
                 policy: profile.policy,
                 peerPresent: peerPresent,
@@ -361,14 +351,12 @@ actor RootWalletVault {
     func authorizeSpend(
         _ draft: SpendDraft,
         peerTrustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool
     ) async throws -> SpendAuthorization {
         let biometricContext = try await authClient.authenticateBiometric(reason: "Approve Numi spend")
         return try await authorizeSpend(
             draft,
             peerTrustSession: peerTrustSession,
-            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: biometricContext
         )
@@ -377,16 +365,12 @@ actor RootWalletVault {
     func authorizeSpend(
         _ draft: SpendDraft,
         peerTrustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool,
         authorizationContext biometricContext: LAContext
     ) async throws -> SpendAuthorization {
         let profile = try await requireInitializedProfile()
         try await keyManager.validateSpendAuthorization(using: biometricContext)
-        let peerPresent = try await validatedPeerPresence(
-            session: peerTrustSession,
-            assertion: peerPresenceAssertion
-        )
+        let peerPresent = try validatedPeerPresence(session: peerTrustSession)
         try policyEngine.requireSpend(
             from: draft.tier,
             policy: profile.policy,
@@ -447,7 +431,6 @@ actor RootWalletVault {
     func submitSpend(
         _ draft: SpendDraft,
         peerTrustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool,
         descriptor: PrivateReceiveDescriptor
     ) async throws -> RelaySubmissionReceipt {
@@ -455,7 +438,6 @@ actor RootWalletVault {
         return try await submitSpend(
             draft,
             peerTrustSession: peerTrustSession,
-            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             descriptor: descriptor,
             authorizationContext: biometricContext
@@ -465,7 +447,6 @@ actor RootWalletVault {
     func submitSpend(
         _ draft: SpendDraft,
         peerTrustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool,
         descriptor: PrivateReceiveDescriptor,
         authorizationContext biometricContext: LAContext
@@ -580,7 +561,6 @@ actor RootWalletVault {
         let authorization = try await authorizeSpend(
             draft,
             peerTrustSession: peerTrustSession,
-            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: biometricContext
         )
@@ -680,11 +660,20 @@ actor RootWalletVault {
         }
         let packageKey = SymmetricKey(data: recoverySecret)
         let sealedBox = try AES.GCM.seal(snapshotData, using: packageKey)
-        let package = RecoveryPackage(
+        let unsignedPackage = UnsignedRecoveryPackage(
             packageID: UUID(),
             sealedState: sealedBox.combined!,
             createdAt: Date(),
-            stateDigest: Data(SHA256.hash(data: snapshotData))
+            stateDigest: Data(SHA256.hash(data: snapshotData)),
+            authorityPublicIdentity: rootPublicIdentity
+        )
+        let package = RecoveryPackage(
+            packageID: unsignedPackage.packageID,
+            sealedState: unsignedPackage.sealedState,
+            createdAt: unsignedPackage.createdAt,
+            stateDigest: unsignedPackage.stateDigest,
+            authorityPublicIdentity: unsignedPackage.authorityPublicIdentity,
+            signature: try await keyManager.signAuthorityPayload(unsignedPackage.signaturePayload())
         )
 
         var fragmentOne = randomData(length: recoverySecret.count)
@@ -701,7 +690,7 @@ actor RootWalletVault {
                 deviceID: peer.deviceID,
                 fragment: fragment,
                 recoveryPackage: package,
-                rootKeyDigest: Data(SHA256.hash(data: rootPublicIdentity)),
+                rootKeyDigest: package.authorityIdentityDigest,
                 createdAt: Date()
             )
         }
@@ -734,7 +723,7 @@ actor RootWalletVault {
         guard role.isAuthority else { throw WalletError.authorityOnly }
         _ = authorizationContext
         guard shares.count == 2 else { throw WalletError.recoveryQuorumIncomplete }
-        try validateRecoveryShares(shares)
+        try await validateRecoveryShares(shares)
 
         var recoverySecret = xor(shares[0].fragment, shares[1].fragment)
         let package = shares[0].recoveryPackage
@@ -864,7 +853,6 @@ actor RootWalletVault {
 
     func resumePendingShieldedSend(
         peerTrustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool
     ) async throws -> RelaySubmissionReceipt {
         let biometricContext = try await authClient.authenticateBiometric(reason: "Approve resumed Numi spend")
@@ -872,7 +860,6 @@ actor RootWalletVault {
         return try await resumePendingShieldedSend(
             checkpointID: checkpointID,
             peerTrustSession: peerTrustSession,
-            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: biometricContext
         )
@@ -881,14 +868,12 @@ actor RootWalletVault {
     func resumePendingShieldedSend(
         checkpointID: UUID,
         peerTrustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool
     ) async throws -> RelaySubmissionReceipt {
         let biometricContext = try await authClient.authenticateBiometric(reason: "Approve resumed Numi spend")
         return try await resumePendingShieldedSend(
             checkpointID: checkpointID,
             peerTrustSession: peerTrustSession,
-            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: biometricContext
         )
@@ -897,7 +882,6 @@ actor RootWalletVault {
     func resumePendingShieldedSend(
         checkpointID: UUID,
         peerTrustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion?,
         privacyExposureDetected: Bool,
         authorizationContext biometricContext: LAContext
     ) async throws -> RelaySubmissionReceipt {
@@ -964,7 +948,6 @@ actor RootWalletVault {
         let authorization = try await authorizeSpend(
             capsule.draft,
             peerTrustSession: peerTrustSession,
-            peerPresenceAssertion: peerPresenceAssertion,
             privacyExposureDetected: privacyExposureDetected,
             authorizationContext: biometricContext
         )
@@ -1129,25 +1112,11 @@ actor RootWalletVault {
         try? await persist(profile)
     }
 
-    private func validatedPeerPresence(
-        session: PeerTrustSession?,
-        assertion: PeerPresenceAssertion?
-    ) async throws -> Bool {
+    private func validatedPeerPresence(session: PeerTrustSession?) throws -> Bool {
         guard let session else { return false }
         guard session.isActive else { return false }
-        guard let assertion else { return false }
-        guard assertion.isActive, assertion.matches(session: session) else {
-            throw WalletError.invalidPeerPresenceAssertion
-        }
-
-        let payload = try JSONEncoder().encode(assertion.unsignedAssertion())
-        let isValid = try await keyManager.verifyPeerSignature(
-            signature: assertion.signature,
-            payload: payload,
-            publicKey: session.peerVerifyingKey
-        )
-        guard isValid else {
-            throw WalletError.invalidPeerPresenceAssertion
+        guard session.capabilities.contains(.peerPresence) else {
+            throw WalletError.invalidPeerTrustSession
         }
         return true
     }
@@ -1624,7 +1593,7 @@ actor RootWalletVault {
         Data(zip(lhs, rhs).map(^))
     }
 
-    private func validateRecoveryShares(_ shares: [RecoveryShareEnvelope]) throws {
+    private func validateRecoveryShares(_ shares: [RecoveryShareEnvelope]) async throws {
         guard shares.count == 2 else { throw WalletError.recoveryQuorumIncomplete }
 
         let kinds = Set(shares.map(\.peerKind))
@@ -1637,10 +1606,25 @@ actor RootWalletVault {
         }
 
         guard let first = shares.first else { throw WalletError.invalidRecoveryPackage }
+        guard first.rootKeyDigest == first.recoveryPackage.authorityIdentityDigest,
+              !first.recoveryPackage.authorityPublicIdentity.isEmpty,
+              !first.recoveryPackage.signature.isEmpty else {
+            throw WalletError.invalidRecoveryPackage
+        }
+        let isPackageAuthentic = try await keyManager.verifyAuthoritySignature(
+            signature: first.recoveryPackage.signature,
+            payload: first.recoveryPackage.signaturePayload(),
+            publicKey: first.recoveryPackage.authorityPublicIdentity
+        )
+        guard isPackageAuthentic else {
+            throw WalletError.invalidRecoveryPackage
+        }
         for share in shares.dropFirst() {
             guard share.recoveryPackage.packageID == first.recoveryPackage.packageID,
                   share.recoveryPackage.sealedState == first.recoveryPackage.sealedState,
                   share.recoveryPackage.stateDigest == first.recoveryPackage.stateDigest,
+                  share.recoveryPackage.authorityPublicIdentity == first.recoveryPackage.authorityPublicIdentity,
+                  share.recoveryPackage.signature == first.recoveryPackage.signature,
                   share.rootKeyDigest == first.rootKeyDigest else {
                 throw WalletError.invalidRecoveryPackage
             }

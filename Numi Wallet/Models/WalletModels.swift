@@ -289,11 +289,45 @@ struct EncryptedVaultBlob: Codable, Sendable {
     var updatedAt: Date
 }
 
+struct UnsignedRecoveryPackage: Codable, Sendable {
+    var packageID: UUID
+    var sealedState: Data
+    var createdAt: Date
+    var stateDigest: Data
+    var authorityPublicIdentity: Data
+
+    func signaturePayload() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(self)
+    }
+}
+
 struct RecoveryPackage: Codable, Sendable {
     var packageID: UUID
     var sealedState: Data
     var createdAt: Date
     var stateDigest: Data
+    var authorityPublicIdentity: Data
+    var signature: Data
+
+    func unsignedPackage() -> UnsignedRecoveryPackage {
+        UnsignedRecoveryPackage(
+            packageID: packageID,
+            sealedState: sealedState,
+            createdAt: createdAt,
+            stateDigest: stateDigest,
+            authorityPublicIdentity: authorityPublicIdentity
+        )
+    }
+
+    func signaturePayload() throws -> Data {
+        try unsignedPackage().signaturePayload()
+    }
+
+    var authorityIdentityDigest: Data {
+        Data(SHA256.hash(data: authorityPublicIdentity))
+    }
 }
 
 struct RecoveryShareEnvelope: Codable, Identifiable, Sendable {

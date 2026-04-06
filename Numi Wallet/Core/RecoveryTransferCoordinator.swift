@@ -15,18 +15,15 @@ actor RecoveryTransferCoordinator {
         senderRole: DeviceRole,
         recipientRole: DeviceRole,
         trustSession: PeerTrustSession?,
-        peerPresenceAssertion: PeerPresenceAssertion? = nil,
         ttl: TimeInterval = 10 * 60
     ) async throws -> RecoveryTransferEnvelope {
         let activeTrustSession = trustSession?.isActive == true ? trustSession : nil
-        let activePresenceAssertion = peerPresenceAssertion?.isActive == true ? peerPresenceAssertion : nil
         try await validatePayloadBinding(
             payload,
             senderRole: senderRole,
             recipientRole: recipientRole,
             trustSessionFingerprint: activeTrustSession?.transcriptFingerprint,
-            activeTrustSession: activeTrustSession,
-            activePresenceAssertion: activePresenceAssertion
+            activeTrustSession: activeTrustSession
         )
         let unsigned = UnsignedRecoveryTransferEnvelope(
             id: UUID(),
@@ -58,23 +55,20 @@ actor RecoveryTransferCoordinator {
     func resolvePayload(
         from document: RecoveryTransferDocument,
         recipientRole: DeviceRole,
-        activeTrustSession: PeerTrustSession? = nil,
-        peerPresenceAssertion: PeerPresenceAssertion? = nil
+        activeTrustSession: PeerTrustSession? = nil
     ) async throws -> RecoveryTransferPayload {
         try document.validate()
         return try await verify(
             envelope: document.envelope,
             recipientRole: recipientRole,
-            activeTrustSession: activeTrustSession,
-            peerPresenceAssertion: peerPresenceAssertion
+            activeTrustSession: activeTrustSession
         )
     }
 
     func verify(
         envelope: RecoveryTransferEnvelope,
         recipientRole: DeviceRole,
-        activeTrustSession: PeerTrustSession? = nil,
-        peerPresenceAssertion: PeerPresenceAssertion? = nil
+        activeTrustSession: PeerTrustSession? = nil
     ) async throws -> RecoveryTransferPayload {
         guard envelope.recipientRole == recipientRole else {
             throw WalletError.invalidRecoveryTransfer
@@ -87,8 +81,7 @@ actor RecoveryTransferCoordinator {
             senderRole: envelope.senderRole,
             recipientRole: envelope.recipientRole,
             trustSessionFingerprint: envelope.trustSessionFingerprint,
-            activeTrustSession: activeTrustSession,
-            activePresenceAssertion: peerPresenceAssertion
+            activeTrustSession: activeTrustSession
         )
 
         let unsignedData = try encoder.encode(envelope.unsignedEnvelope())
@@ -100,6 +93,7 @@ actor RecoveryTransferCoordinator {
         guard isValid else {
             throw WalletError.invalidRecoveryTransfer
         }
+        try validateEnvelopeBinding(envelope, activeTrustSession: activeTrustSession)
         return envelope.payload
     }
 
@@ -108,76 +102,111 @@ actor RecoveryTransferCoordinator {
         senderRole: DeviceRole,
         recipientRole: DeviceRole,
         trustSessionFingerprint: String?,
-        activeTrustSession: PeerTrustSession?,
-        activePresenceAssertion: PeerPresenceAssertion?
+        activeTrustSession: PeerTrustSession?
     ) async throws {
         switch payload {
         case .authorityBundle(let shares):
             guard senderRole == .authorityPhone,
                   recipientRole == .authorityPhone,
-                  !shares.isEmpty else {
+                  shares.count == PeerKind.allCases.count else {
                 throw WalletError.invalidRecoveryTransfer
             }
+            try await validateRecoveryShares(shares)
         case .peerShare(let share):
             guard isAllowedPeerShareRoute(senderRole: senderRole, recipientRole: recipientRole),
                   let expectedPeerKind = peerKindBoundToTransfer(senderRole: senderRole, recipientRole: recipientRole),
                   share.peerKind == expectedPeerKind else {
                 throw WalletError.invalidRecoveryTransfer
             }
-            guard !share.fragment.isEmpty,
-                  !share.recoveryPackage.sealedState.isEmpty,
-                  !share.recoveryPackage.stateDigest.isEmpty,
-                  !share.rootKeyDigest.isEmpty else {
-                throw WalletError.invalidRecoveryTransfer
-            }
+            try await validateRecoveryShare(share)
             guard let trustSessionFingerprint, !trustSessionFingerprint.isEmpty else {
                 throw WalletError.peerPresenceRequired
             }
 
             let requiresBoundPresence = senderRole.isRecoveryPeer || recipientRole.isRecoveryPeer
             if requiresBoundPresence {
-                let peerPresent = try await validatedPeerPresence(
-                    session: activeTrustSession,
-                    assertion: activePresenceAssertion
+                _ = try validatedRecoveryTransferSession(
+                    activeTrustSession,
+                    fingerprint: trustSessionFingerprint
                 )
-                guard peerPresent else {
-                    throw WalletError.peerPresenceRequired
-                }
-            }
-
-            if recipientRole.isRecoveryPeer {
-                guard let activeTrustSession else {
-                    throw WalletError.peerPresenceRequired
-                }
-                guard activeTrustSession.isActive,
-                      activeTrustSession.transcriptFingerprint == trustSessionFingerprint else {
-                    throw WalletError.invalidPeerTrustSession
-                }
             }
         }
     }
 
-    private func validatedPeerPresence(
-        session: PeerTrustSession?,
-        assertion: PeerPresenceAssertion?
-    ) async throws -> Bool {
-        guard let session else { return false }
-        guard session.isActive else { return false }
-        guard let assertion else { return false }
-        guard assertion.isActive, assertion.matches(session: session) else {
-            throw WalletError.invalidPeerPresenceAssertion
+    private func validatedRecoveryTransferSession(
+        _ session: PeerTrustSession?,
+        fingerprint: String
+    ) throws -> PeerTrustSession {
+        guard let session, session.isActive else {
+            throw WalletError.peerPresenceRequired
+        }
+        guard session.capabilities.contains(.recoveryTransfer),
+              session.transcriptFingerprint == fingerprint else {
+            throw WalletError.invalidPeerTrustSession
+        }
+        return session
+    }
+
+    private func validateEnvelopeBinding(
+        _ envelope: RecoveryTransferEnvelope,
+        activeTrustSession: PeerTrustSession?
+    ) throws {
+        guard case .peerShare = envelope.payload else {
+            return
+        }
+        guard let fingerprint = envelope.trustSessionFingerprint else {
+            throw WalletError.invalidPeerTrustSession
+        }
+        let session = try validatedRecoveryTransferSession(activeTrustSession, fingerprint: fingerprint)
+        guard envelope.senderRole == session.peerRole,
+              envelope.senderDeviceID == session.peerDeviceID,
+              envelope.senderVerifyingKey == session.peerVerifyingKey else {
+            throw WalletError.invalidPeerTrustSession
+        }
+    }
+
+    private func validateRecoveryShare(_ share: RecoveryShareEnvelope) async throws {
+        guard !share.fragment.isEmpty,
+              !share.recoveryPackage.sealedState.isEmpty,
+              !share.recoveryPackage.stateDigest.isEmpty,
+              !share.recoveryPackage.authorityPublicIdentity.isEmpty,
+              !share.recoveryPackage.signature.isEmpty,
+              !share.rootKeyDigest.isEmpty,
+              share.rootKeyDigest == share.recoveryPackage.authorityIdentityDigest else {
+            throw WalletError.invalidRecoveryPackage
         }
 
-        let payload = try encoder.encode(assertion.unsignedAssertion())
-        let isValid = try await keyManager.verifyPeerSignature(
-            signature: assertion.signature,
-            payload: payload,
-            publicKey: session.peerVerifyingKey
+        let isPackageAuthentic = try await keyManager.verifyAuthoritySignature(
+            signature: share.recoveryPackage.signature,
+            payload: share.recoveryPackage.signaturePayload(),
+            publicKey: share.recoveryPackage.authorityPublicIdentity
         )
-        guard isValid else {
-            throw WalletError.invalidPeerPresenceAssertion
+        guard isPackageAuthentic else {
+            throw WalletError.invalidRecoveryPackage
         }
-        return true
+    }
+
+    private func validateRecoveryShares(_ shares: [RecoveryShareEnvelope]) async throws {
+        guard shares.count == PeerKind.allCases.count else {
+            throw WalletError.invalidRecoveryPackage
+        }
+        let peerKinds = Set(shares.map(\.peerKind))
+        guard peerKinds == Set(PeerKind.allCases) else {
+            throw WalletError.invalidRecoveryPackage
+        }
+        try await validateRecoveryShare(shares[0])
+        let first = shares[0]
+        for share in shares.dropFirst() {
+            try await validateRecoveryShare(share)
+            guard share.recoveryPackage.packageID == first.recoveryPackage.packageID,
+                  share.recoveryPackage.sealedState == first.recoveryPackage.sealedState,
+                  share.recoveryPackage.stateDigest == first.recoveryPackage.stateDigest,
+                  share.recoveryPackage.authorityPublicIdentity == first.recoveryPackage.authorityPublicIdentity,
+                  share.recoveryPackage.signature == first.recoveryPackage.signature,
+                  share.rootKeyDigest == first.rootKeyDigest else {
+                throw WalletError.invalidRecoveryPackage
+            }
+        }
     }
 
     private func isAllowedPeerShareRoute(senderRole: DeviceRole, recipientRole: DeviceRole) -> Bool {

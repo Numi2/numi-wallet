@@ -1,12 +1,9 @@
 import Foundation
 
 actor PeerTrustCoordinator {
-    private let pairingChannel: PairingChannel
     private var activeSession: PeerTrustSession?
 
-    init(pairingChannel: PairingChannel) {
-        self.pairingChannel = pairingChannel
-    }
+    init(pairingChannel _: PairingChannel) {}
 
     func establishSession(from localSession: AuthenticatedLocalPeerSession) async throws -> PeerTrustSession {
         guard localSession.isActive,
@@ -34,13 +31,6 @@ actor PeerTrustCoordinator {
         )
         activeSession = session
         return session
-    }
-
-    func issuePresenceAssertion(ttl: TimeInterval = 90) async throws -> PeerPresenceAssertion {
-        guard let session = currentSession() else {
-            throw WalletError.peerPresenceRequired
-        }
-        return try await pairingChannel.makePresenceAssertion(for: session, ttl: ttl)
     }
 
     func currentSession() -> PeerTrustSession? {

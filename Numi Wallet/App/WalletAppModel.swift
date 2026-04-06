@@ -200,15 +200,13 @@ final class WalletAppModel: ObservableObject {
                 let peerPresenceContext = try await requiredPeerPresenceContext()
                 if let authorizationContext {
                     _ = try await rootVault.unlockVault(
-                        peerTrustSession: peerPresenceContext.session,
-                        peerPresenceAssertion: peerPresenceContext.assertion,
+                        peerTrustSession: peerPresenceContext,
                         privacyExposureDetected: privacyExposureDetected,
                         authorizationContext: authorizationContext
                     )
                 } else {
                     _ = try await rootVault.unlockVault(
-                        peerTrustSession: peerPresenceContext.session,
-                        peerPresenceAssertion: peerPresenceContext.assertion,
+                        peerTrustSession: peerPresenceContext,
                         privacyExposureDetected: privacyExposureDetected
                     )
                 }
@@ -234,8 +232,7 @@ final class WalletAppModel: ObservableObject {
                 let peerPresenceContext = try await peerPresenceContext(required: tier == .vault)
                 let descriptor = try await rootVault.rotateDescriptor(
                     tier: tier,
-                    peerTrustSession: peerPresenceContext.session,
-                    peerPresenceAssertion: peerPresenceContext.assertion,
+                    peerTrustSession: peerPresenceContext,
                     privacyExposureDetected: privacyExposureDetected
                 )
                 await refreshDashboard()
@@ -305,8 +302,7 @@ final class WalletAppModel: ObservableObject {
                 if let authorizationContext {
                     receipt = try await rootVault.submitSpend(
                         draft,
-                        peerTrustSession: peerPresenceContext.session,
-                        peerPresenceAssertion: peerPresenceContext.assertion,
+                        peerTrustSession: peerPresenceContext,
                         privacyExposureDetected: privacyExposureDetected,
                         descriptor: descriptor,
                         authorizationContext: authorizationContext
@@ -314,8 +310,7 @@ final class WalletAppModel: ObservableObject {
                 } else {
                     receipt = try await rootVault.submitSpend(
                         draft,
-                        peerTrustSession: peerPresenceContext.session,
-                        peerPresenceAssertion: peerPresenceContext.assertion,
+                        peerTrustSession: peerPresenceContext,
                         privacyExposureDetected: privacyExposureDetected,
                         descriptor: descriptor
                     )
@@ -441,8 +436,7 @@ final class WalletAppModel: ObservableObject {
                 let payload = try await recoveryTransferCoordinator.resolvePayload(
                     from: stagedRecoveryTransfer.document,
                     recipientRole: role,
-                    activeTrustSession: peerPresenceContext.session,
-                    peerPresenceAssertion: peerPresenceContext.assertion
+                    activeTrustSession: peerPresenceContext
                 )
                 guard case .peerShare(let share) = payload else {
                     throw WalletError.invalidRecoveryTransfer
@@ -476,8 +470,7 @@ final class WalletAppModel: ObservableObject {
                     payload: .peerShare(share),
                     senderRole: role,
                     recipientRole: .authorityPhone,
-                    trustSession: peerPresenceContext.session,
-                    peerPresenceAssertion: peerPresenceContext.assertion
+                    trustSession: peerPresenceContext
                 )
                 stageRecoveryTransfer(envelope: envelope)
                 await persistTransferEnvelope(envelope, action: .prepared)
@@ -617,8 +610,7 @@ final class WalletAppModel: ObservableObject {
                 let peerPresenceContext = try await peerPresenceContext(required: false)
                 let receipt = try await rootVault.resumePendingShieldedSend(
                     checkpointID: checkpointID,
-                    peerTrustSession: peerPresenceContext.session,
-                    peerPresenceAssertion: peerPresenceContext.assertion,
+                    peerTrustSession: peerPresenceContext,
                     privacyExposureDetected: privacyExposureDetected,
                     authorizationContext: authorizationContext
                 )
@@ -772,24 +764,21 @@ final class WalletAppModel: ObservableObject {
         isScreenCaptureActive
     }
 
-    private func requiredPeerPresenceContext() async throws -> (session: PeerTrustSession, assertion: PeerPresenceAssertion) {
+    private func requiredPeerPresenceContext() async throws -> PeerTrustSession {
         guard let session = peerTrustSession, session.isActive else {
             throw WalletError.peerPresenceRequired
         }
-        let assertion = try await peerTrustCoordinator.issuePresenceAssertion()
-        return (session, assertion)
+        return session
     }
 
-    private func peerPresenceContext(required: Bool) async throws -> (session: PeerTrustSession?, assertion: PeerPresenceAssertion?) {
+    private func peerPresenceContext(required: Bool) async throws -> PeerTrustSession? {
         if required {
-            let context = try await requiredPeerPresenceContext()
-            return (context.session, context.assertion)
+            return try await requiredPeerPresenceContext()
         }
         guard let session = peerTrustSession, session.isActive else {
-            return (nil, nil)
+            return nil
         }
-        let assertion = try await peerTrustCoordinator.issuePresenceAssertion()
-        return (session, assertion)
+        return session
     }
 
     private func handleScreenPrivacyEvent(_ event: ScreenPrivacyMonitor.Event) {

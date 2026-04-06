@@ -99,6 +99,9 @@ actor RecoveryPeerVault {
         guard !share.fragment.isEmpty,
               !share.recoveryPackage.sealedState.isEmpty,
               !share.recoveryPackage.stateDigest.isEmpty,
+              !share.recoveryPackage.authorityPublicIdentity.isEmpty,
+              !share.recoveryPackage.signature.isEmpty,
+              share.rootKeyDigest == share.recoveryPackage.authorityIdentityDigest,
               !share.rootKeyDigest.isEmpty else {
             throw WalletError.invalidRecoveryPackage
         }

@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 enum PeerTrustLevel: String, Codable, Sendable {
@@ -82,85 +81,5 @@ struct PeerTrustSession: Identifiable, Codable, Sendable {
         case .nearbyInteraction:
             return nearbyVerification?.label ?? proximityEvidence.label
         }
-    }
-}
-
-struct UnsignedPeerPresenceAssertion: Codable, Sendable {
-    let id: UUID
-    let sessionID: UUID
-    let peerDeviceID: String
-    let peerRole: DeviceRole
-    let transport: PairingTransport
-    let capabilities: [PeerSessionCapability]
-    let proximityEvidence: PeerProximityEvidence
-    let trustLevel: PeerTrustLevel
-    let nearbyVerification: NearbyPeerVerification?
-    let transcriptFingerprint: String
-    let peerVerifyingKey: Data
-    let appAttested: Bool
-    let issuedAt: Date
-    let expiresAt: Date
-}
-
-struct PeerPresenceAssertion: Identifiable, Codable, Sendable {
-    let id: UUID
-    let sessionID: UUID
-    let peerDeviceID: String
-    let peerRole: DeviceRole
-    let transport: PairingTransport
-    let capabilities: [PeerSessionCapability]
-    let proximityEvidence: PeerProximityEvidence
-    let trustLevel: PeerTrustLevel
-    let nearbyVerification: NearbyPeerVerification?
-    let transcriptFingerprint: String
-    let peerVerifyingKey: Data
-    let appAttested: Bool
-    let issuedAt: Date
-    let expiresAt: Date
-    let signature: Data
-
-    var isActive: Bool {
-        issuedAt <= Date() && expiresAt > Date()
-    }
-
-    var fingerprint: String {
-        let digest = SHA256.hash(data: signature)
-        return digest.compactMap { String(format: "%02x", $0) }.joined().prefix(16).description
-    }
-
-    func unsignedAssertion() -> UnsignedPeerPresenceAssertion {
-        UnsignedPeerPresenceAssertion(
-            id: id,
-            sessionID: sessionID,
-            peerDeviceID: peerDeviceID,
-            peerRole: peerRole,
-            transport: transport,
-            capabilities: capabilities,
-            proximityEvidence: proximityEvidence,
-            trustLevel: trustLevel,
-            nearbyVerification: nearbyVerification,
-            transcriptFingerprint: transcriptFingerprint,
-            peerVerifyingKey: peerVerifyingKey,
-            appAttested: appAttested,
-            issuedAt: issuedAt,
-            expiresAt: expiresAt
-        )
-    }
-
-    func matches(session: PeerTrustSession) -> Bool {
-        session.id == sessionID &&
-        session.isActive &&
-        session.peerDeviceID == peerDeviceID &&
-        session.peerRole == peerRole &&
-        session.transport == transport &&
-        session.capabilities == capabilities &&
-        session.proximityEvidence == proximityEvidence &&
-        session.trustLevel == trustLevel &&
-        session.nearbyVerification == nearbyVerification &&
-        session.transcriptFingerprint == transcriptFingerprint &&
-        session.peerVerifyingKey == peerVerifyingKey &&
-        session.appAttested == appAttested &&
-        expiresAt <= session.expiresAt &&
-        issuedAt >= session.establishedAt
     }
 }
