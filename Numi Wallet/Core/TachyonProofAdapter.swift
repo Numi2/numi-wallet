@@ -1,12 +1,18 @@
 import Foundation
 
 protocol TachyonProofAdapter: Sendable {
-    func makeWalletStateCheckJob(profile: WalletProfile, label: String, lane: TachyonProofLane) throws -> TachyonProofJob
+    func makeWalletStateCheckJob(
+        profile: WalletProfile,
+        label: String,
+        lane: TachyonProofLane,
+        executionGrant: TachyonProofExecutionGrant
+    ) throws -> TachyonProofJob
     func makeSendProofJob(
         capsule: TachyonSendCapsule,
         profile: WalletProfile,
         witnessRequirements: [TachyonWitnessRequirement],
-        lane: TachyonProofLane
+        lane: TachyonProofLane,
+        executionGrant: TachyonProofExecutionGrant
     ) throws -> TachyonProofJob
     func verify(_ artifact: TachyonProofArtifact, for job: TachyonProofJob) throws -> TachyonProofArtifact
     func localArtifact(from artifact: TachyonProofArtifact) -> LocalProofArtifact
@@ -19,7 +25,8 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
     func makeWalletStateCheckJob(
         profile: WalletProfile,
         label: String = "Wallet State Check",
-        lane: TachyonProofLane = .foreground
+        lane: TachyonProofLane = .foreground,
+        executionGrant: TachyonProofExecutionGrant = .foregroundUnrestricted
     ) throws -> TachyonProofJob {
         let createdAt = now()
         let bundle = TachyonBundleDraft.walletStateCheck(network: profile.shielded.network, createdAt: createdAt)
@@ -47,12 +54,14 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
             witnessDigest: witnessDigest,
             quoteBindingDigest: nil,
             lane: lane,
+            executionGrant: executionGrant,
             label: label
         )
 
         return makeJob(
             label: label,
             lane: lane,
+            executionGrant: executionGrant,
             compressionMode: .uncompressed,
             compressionBoundary: .recursiveWork,
             walletStateDigest: walletStateDigest,
@@ -71,7 +80,8 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
         capsule: TachyonSendCapsule,
         profile: WalletProfile,
         witnessRequirements: [TachyonWitnessRequirement],
-        lane: TachyonProofLane = .foreground
+        lane: TachyonProofLane = .foreground,
+        executionGrant: TachyonProofExecutionGrant = .foregroundUnrestricted
     ) throws -> TachyonProofJob {
         let createdAt = now()
         let walletStateDigest = try TachyonSupport.digest(
@@ -99,12 +109,14 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
             witnessDigest: witnessDigest,
             quoteBindingDigest: capsule.quoteBindingDigest,
             lane: lane,
+            executionGrant: executionGrant,
             label: "Tachyon Send Proof"
         )
 
         return makeJob(
             label: "Tachyon Send Proof",
             lane: lane,
+            executionGrant: executionGrant,
             compressionMode: .compressed,
             compressionBoundary: .relayPackaging,
             walletStateDigest: walletStateDigest,
@@ -122,6 +134,9 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
     func verify(_ artifact: TachyonProofArtifact, for job: TachyonProofJob) throws -> TachyonProofArtifact {
         guard artifact.jobID == job.id else {
             throw WalletError.invalidProofArtifact("Proof job identifier mismatch.")
+        }
+        guard artifact.executionGrant == job.executionGrant else {
+            throw WalletError.invalidProofArtifact("Proof execution grant mismatch.")
         }
         guard artifact.requestedJobDigest == job.jobDigest else {
             throw WalletError.invalidProofArtifact("Proof artifact does not bind to the requested job digest.")
@@ -188,12 +203,14 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
             witnessDigest: witnessDigest,
             quoteBindingDigest: nil,
             lane: .foreground,
+            executionGrant: .foregroundUnrestricted,
             label: localJob.label
         )
 
         return makeJob(
             label: localJob.label,
             lane: .foreground,
+            executionGrant: .foregroundUnrestricted,
             compressionMode: .uncompressed,
             compressionBoundary: .recursiveWork,
             walletStateDigest: Data(),
@@ -211,6 +228,7 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
     private func makeJob(
         label: String,
         lane: TachyonProofLane,
+        executionGrant: TachyonProofExecutionGrant,
         compressionMode: TachyonProofCompressionMode,
         compressionBoundary: TachyonCompressionBoundary,
         walletStateDigest: Data,
@@ -230,6 +248,7 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
             quoteBindingDigest ?? Data(),
             transcriptDigest,
             Data(lane.rawValue.utf8),
+            Data(executionGrant.rawValue.utf8),
             Data(compressionMode.rawValue.utf8),
             Data(compressionBoundary.rawValue.utf8),
             Data(label.utf8)
@@ -239,6 +258,7 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
             id: UUID(),
             label: label,
             lane: lane,
+            executionGrant: executionGrant,
             compressionMode: compressionMode,
             compressionBoundary: compressionBoundary,
             walletStateDigest: walletStateDigest,
@@ -261,6 +281,7 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
         witnessDigest: Data,
         quoteBindingDigest: Data?,
         lane: TachyonProofLane,
+        executionGrant: TachyonProofExecutionGrant,
         label: String
     ) -> Data {
         TachyonSupport.digest(
@@ -269,6 +290,7 @@ struct RaguTachyonProofAdapter: TachyonProofAdapter {
             witnessDigest,
             quoteBindingDigest ?? Data(),
             Data(lane.rawValue.utf8),
+            Data(executionGrant.rawValue.utf8),
             Data(label.utf8)
         )
     }

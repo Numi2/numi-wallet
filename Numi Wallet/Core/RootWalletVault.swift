@@ -516,7 +516,8 @@ actor RootWalletVault {
             capsule: sendCapsule,
             profile: profile,
             witnessRequirements: witnessRequirements,
-            lane: .continuedProcessing
+            lane: .continuedProcessing,
+            executionGrant: continuedProcessingExecutionGrant()
         )
         let continuedProcessingTaskIdentifier = TachyonProofContinuationCoordinator.taskIdentifier(for: checkpointID)
         let proofCheckpoint = enqueueProofCheckpoint(
@@ -533,7 +534,7 @@ actor RootWalletVault {
             taskIdentifier: continuedProcessingTaskIdentifier,
             title: "Completing private send proof",
             subtitle: "Sealed Tachyon capsule in progress",
-            requestGPU: false
+            executionGrant: proofJob.executionGrant
         )
 
         if didScheduleContinuedProcessing {
@@ -543,7 +544,8 @@ actor RootWalletVault {
                 capsule: sendCapsule,
                 profile: profile,
                 witnessRequirements: witnessRequirements,
-                lane: .foreground
+                lane: .foreground,
+                executionGrant: .foregroundUnrestricted
             )
             updateProofCheckpoint(
                 profile: &profile,
@@ -840,7 +842,8 @@ actor RootWalletVault {
         let proofJob = try tachyonProofAdapter.makeWalletStateCheckJob(
             profile: profile,
             label: "Wallet State Check",
-            lane: .foreground
+            lane: .foreground,
+            executionGrant: .foregroundUnrestricted
         )
         let proofArtifact = try await prover.prove(
             job: proofJob,
@@ -907,7 +910,8 @@ actor RootWalletVault {
                     capsule: checkpoint.capsule,
                     profile: profile,
                     witnessRequirements: checkpoint.job.witnessRequirements,
-                    lane: .resumed
+                    lane: .resumed,
+                    executionGrant: .foregroundUnrestricted
                 )
                 updateProofCheckpoint(
                     profile: &profile,
@@ -925,7 +929,8 @@ actor RootWalletVault {
                 capsule: checkpoint.capsule,
                 profile: profile,
                 witnessRequirements: checkpoint.job.witnessRequirements,
-                lane: .resumed
+                lane: .resumed,
+                executionGrant: .foregroundUnrestricted
             )
             updateProofCheckpoint(
                 profile: &profile,
@@ -1416,9 +1421,20 @@ actor RootWalletVault {
         }
     }
 
+    private func proofExecutionGrantLabel(for grant: TachyonProofExecutionGrant) -> String {
+        switch grant {
+        case .foregroundUnrestricted:
+            return "Foreground"
+        case .continuedProcessingCPU:
+            return "Continued CPU"
+        case .continuedProcessingGPU:
+            return "Continued GPU"
+        }
+    }
+
     private func proofQueueDetail(for checkpoint: TachyonProofCheckpoint) -> String {
         if checkpoint.state == .proofReady {
-            return "Local proof verified. Awaiting biometric spend approval and relay submission."
+            return "Local proof verified on the \(proofExecutionGrantLabel(for: checkpoint.job.executionGrant)) grant. Awaiting biometric spend approval and relay submission."
         }
 
         if let progress = checkpoint.progress.last {
@@ -1435,15 +1451,15 @@ actor RootWalletVault {
 
         switch checkpoint.state {
         case .queued:
-            return "Sealed send capsule persisted and waiting for the next proof lane."
+            return "Sealed send capsule persisted and waiting for the next \(proofExecutionGrantLabel(for: checkpoint.job.executionGrant)) grant."
         case .running:
-            return "Proof lane is actively processing this sealed send capsule."
+            return "Proof lane is actively processing this sealed send capsule on the \(proofExecutionGrantLabel(for: checkpoint.job.executionGrant)) grant."
         case .expired:
             return "Continued processing expired before authorization. Resume on the foreground Tachyon lane."
         case .failed:
             return "The last proof attempt failed before authorization. Retry from the persisted capsule."
         case .proofReady:
-            return "Local proof verified. Awaiting biometric spend approval and relay submission."
+            return "Local proof verified on the \(proofExecutionGrantLabel(for: checkpoint.job.executionGrant)) grant. Awaiting biometric spend approval and relay submission."
         }
     }
 
@@ -1485,6 +1501,10 @@ actor RootWalletVault {
         )
         profile.shielded.pendingProofs.append(checkpoint)
         return checkpoint
+    }
+
+    private func continuedProcessingExecutionGrant() -> TachyonProofExecutionGrant {
+        .continuedProcessingCPU
     }
 
     private func updateProofCheckpoint(

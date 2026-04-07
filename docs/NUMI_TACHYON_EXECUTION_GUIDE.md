@@ -292,7 +292,6 @@ Current repo gaps that matter for Tachyon on iOS:
 - `Config/NumiWallet-Info.plist` now carries the background task identifiers, but there is still no checked-in entitlements file for Tachyon-critical platform features
 - no full App Attest bootstrap and attestation-registration lifecycle
 - no real proof backend for recursive shielded spends
-- no explicit proof execution context separating foreground, continued-processing CPU, and continued-processing GPU grants
 - no chunked GPU prover that can publish progress and stop cleanly on expiration
 - the Tachyon adapter boundary is present, but still mock-heavy and not yet bound to a production proving backend
 
@@ -538,7 +537,7 @@ Add explicit models for:
 - `PIRReadinessLease`
 - `PIRRefreshTicket`
 
-Repository implementation note as of April 5, 2026:
+Repository implementation note as of April 6, 2026:
 
 - `PIRSyncSnapshot` now persists provider receipts, mismatch events, dispute evidence, a readiness lease, and a short-lived refresh-ticket ledger.
 - `ShieldedStateCoordinator` now preserves the last trusted lease on stale or disputed responses and can fall back to cached discovery tickets during iOS background refresh.
@@ -989,16 +988,15 @@ Repository implementation note as of April 5, 2026:
 
 - `TachyonProofCheckpoint` is now persisted in shielded wallet state with the sealed send capsule, proof job, progress timeline, returned artifact, and resumable status.
 - `TachyonProofContinuationCoordinator` now registers an iOS continued-processing handler under a wildcard task identifier, reports progress through `NSProgress`, and submits with `.fail` semantics.
-- `RootWalletVault.submitSpend` now checkpoints the send proof before execution, attempts a `BGContinuedProcessingTaskRequest` lane first, falls back to the foreground lane if immediate scheduling is unavailable, and keeps proof-ready or expired checkpoints persisted until authorization and relay submission complete. The current call site still submits with `requestGPU: false`.
+- `RootWalletVault.submitSpend` now checkpoints the send proof before execution, attempts a `BGContinuedProcessingTaskRequest` lane first, falls back to the foreground lane if immediate scheduling is unavailable, and keeps proof-ready or expired checkpoints persisted until authorization and relay submission complete. The current call site defaults that continued-processing lane to CPU.
 - `RootWalletVault.resumePendingShieldedSend(checkpointID:...)` and `discardPendingShieldedSend(checkpointID:...)` now operate on specific persisted capsules: proof-ready checkpoints go straight to local authorization and relay submission, expired/queued/failed checkpoints rerun on the `resumed` lane before authorization, and discarding an unsent introduction capsule safely unwinds the bootstrap relationship instead of stranding it.
 - The dashboard now exposes a real checkpoint browser for pending shielded sends, including per-capsule state, lane, freshness, resume/authorize actions, and destructive discard behind privileged local authentication.
 - `Config/NumiWallet-Info.plist` now includes `BGTaskSchedulerPermittedIdentifiers` for app refresh and Tachyon proof wildcard identifiers, but there is still no checked-in entitlements file.
-- `LocalProver` still attempts Metal whenever a device and pipeline are available. That is acceptable for foreground proofing, but it is the wrong default for a background CPU-only continued-processing grant.
+- `TachyonProofJob` and `TachyonProofArtifact` now carry an explicit execution grant separate from the proof lane, and `LocalProver` enforces that only continued-processing GPU grants may touch Metal while foreground and resumed lanes stay foreground-unrestricted.
 
 Remaining follow-on work on this tranche:
 
 - add a checked-in entitlements file and provisioning story for any GPU-enabled continued-processing build
-- add an explicit proof execution context and wire it from scheduler outcome to prover behavior
 - refactor the GPU path into checkpointable epochs instead of a single blocking Metal dispatch
 - benchmark foreground, continued-processing CPU, and optional continued-processing GPU behavior on supported devices before shipping the GPU path
 

@@ -6,6 +6,25 @@ enum TachyonProofLane: String, Codable, Sendable {
     case resumed
 }
 
+enum TachyonProofExecutionGrant: String, Codable, Sendable {
+    case foregroundUnrestricted
+    case continuedProcessingCPU
+    case continuedProcessingGPU
+
+    var requiresContinuedProcessingTask: Bool {
+        switch self {
+        case .foregroundUnrestricted:
+            return false
+        case .continuedProcessingCPU, .continuedProcessingGPU:
+            return true
+        }
+    }
+
+    var permitsGPU: Bool {
+        self == .continuedProcessingGPU
+    }
+}
+
 enum TachyonProofBackendKind: String, Codable, Sendable {
     case metalFallback
     case cpuFallback
@@ -141,6 +160,7 @@ struct TachyonProofJob: Codable, Sendable, Identifiable {
     var id: UUID
     var label: String
     var lane: TachyonProofLane
+    var executionGrant: TachyonProofExecutionGrant
     var compressionMode: TachyonProofCompressionMode
     var compressionBoundary: TachyonCompressionBoundary
     var walletStateDigest: Data
@@ -161,6 +181,7 @@ struct TachyonProofArtifact: Codable, Sendable {
     var requestedJobDigest: Data
     var backend: TachyonProofBackendKind
     var lane: TachyonProofLane
+    var executionGrant: TachyonProofExecutionGrant
     var compressionMode: TachyonProofCompressionMode
     var compressionBoundary: TachyonCompressionBoundary
     var walletStateDigest: Data

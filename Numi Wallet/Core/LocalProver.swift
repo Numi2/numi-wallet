@@ -36,6 +36,7 @@ actor LocalProver {
         pairedMacAvailable: Bool,
         progressSink: (@Sendable (TachyonProofProgress) async -> Void)? = nil
     ) async throws -> TachyonProofArtifact {
+        try validate(job)
         let start = Date()
         let progressBuffer = TachyonProofProgressBuffer()
 
@@ -57,7 +58,7 @@ actor LocalProver {
         await emit(
             phase: .prepared,
             fractionCompleted: 0.05,
-            detail: "Proof job sealed for the iPhone lane.",
+            detail: "Proof job sealed for the \(grantLabel(for: job.executionGrant)) execution grant.",
             at: start
         )
         await emit(
@@ -77,7 +78,8 @@ actor LocalProver {
         let proofSeed: Data
         let usedGPU: Bool
 
-        if let device,
+        if job.executionGrant.permitsGPU,
+           let device,
            let pipelineState,
            let metalDigest = try metalDigest(
                seed: seed,
@@ -97,14 +99,14 @@ actor LocalProver {
             await emit(
                 phase: .accumulated,
                 fractionCompleted: job.compressionMode == .compressed ? 0.86 : 1.0,
-                detail: "Recursive work completed on \(venue)."
+                detail: "Recursive work completed on \(venue) under the \(grantLabel(for: job.executionGrant)) grant."
             )
         } else {
-            proofSeed = try await cpuDigest(seed: seed, rounds: job.rounds) { fractionCompleted in
+            proofSeed = try await cpuDigest(seed: seed, rounds: job.rounds) { [self] fractionCompleted in
                 await emit(
                     phase: .accumulated,
                     fractionCompleted: 0.18 + (fractionCompleted * 0.64),
-                    detail: "Recursive work \(Int((fractionCompleted * 100).rounded()))% complete on CPU fallback."
+                    detail: "Recursive work \(Int((fractionCompleted * 100).rounded()))% complete on CPU fallback under the \(grantLabel(for: job.executionGrant)) grant."
                 )
             }
             usedGPU = false
@@ -113,7 +115,7 @@ actor LocalProver {
             await emit(
                 phase: .accumulated,
                 fractionCompleted: job.compressionMode == .compressed ? 0.86 : 1.0,
-                detail: "Recursive work completed on \(venue)."
+                detail: "Recursive work completed on \(venue) under the \(grantLabel(for: job.executionGrant)) grant."
             )
         }
 
@@ -143,6 +145,7 @@ actor LocalProver {
             requestedJobDigest: job.jobDigest,
             backend: backend,
             lane: job.lane,
+            executionGrant: job.executionGrant,
             compressionMode: job.compressionMode,
             compressionBoundary: job.compressionBoundary,
             walletStateDigest: job.walletStateDigest,
@@ -171,6 +174,31 @@ actor LocalProver {
         let artifact = try await prove(job: tachyonJob, policy: policy, pairedMacAvailable: pairedMacAvailable)
         let verified = try compatibilityAdapter.verify(artifact, for: tachyonJob)
         return compatibilityAdapter.localArtifact(from: verified)
+    }
+
+    private func validate(_ job: TachyonProofJob) throws {
+        switch (job.lane, job.executionGrant) {
+        case (.foreground, .foregroundUnrestricted),
+             (.resumed, .foregroundUnrestricted),
+             (.continuedProcessing, .continuedProcessingCPU),
+             (.continuedProcessing, .continuedProcessingGPU):
+            return
+        default:
+            throw WalletError.invalidProofArtifact(
+                "Proof lane \(job.lane.rawValue) does not permit the \(job.executionGrant.rawValue) execution grant."
+            )
+        }
+    }
+
+    private func grantLabel(for grant: TachyonProofExecutionGrant) -> String {
+        switch grant {
+        case .foregroundUnrestricted:
+            return "foreground"
+        case .continuedProcessingCPU:
+            return "continued-processing CPU"
+        case .continuedProcessingGPU:
+            return "continued-processing GPU"
+        }
     }
 
     private func cpuDigest(

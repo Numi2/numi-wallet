@@ -51,9 +51,10 @@ actor TachyonProofContinuationCoordinator {
         taskIdentifier: String,
         title: String,
         subtitle: String,
-        requestGPU: Bool
+        executionGrant: TachyonProofExecutionGrant
     ) async -> Bool {
         #if os(iOS)
+        guard executionGrant.requiresContinuedProcessingTask else { return false }
         guard installed else { return false }
         guard #available(iOS 26.0, *) else { return false }
 
@@ -63,7 +64,7 @@ actor TachyonProofContinuationCoordinator {
             subtitle: subtitle
         )
         request.strategy = .fail
-        if requestGPU, BGTaskScheduler.supportedResources.contains(.gpu) {
+        if executionGrant.permitsGPU, BGTaskScheduler.supportedResources.contains(.gpu) {
             request.requiredResources = .gpu
         }
 
@@ -74,7 +75,7 @@ actor TachyonProofContinuationCoordinator {
             return false
         }
         #else
-        _ = (taskIdentifier, title, subtitle, requestGPU)
+        _ = (taskIdentifier, title, subtitle, executionGrant)
         return false
         #endif
     }
